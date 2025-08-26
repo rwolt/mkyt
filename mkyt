@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# mkyt — Make a YouTube-ready video from a WAV + cover image.
+# Defaults: no visualizer; auto-detect WAV & cover; auto-size by cover aspect.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: mkyt [none|waveform|spectrum|bars] [options]
+
+Positional (optional):
+  none|waveform|spectrum|bars   Visualizer mode (default: none)
+
+Options (all optional):
+  -i <cover>       Cover image (jpg/jpeg/png)
+  -a <audio>       Audio file (wav)
+  -o <output>      Output MP4 (default: <audio_basename>.mp4)
+  -w <width>       Output width  (auto by cover AR if not set)
+  -h <height>      Output height (auto by cover AR if not set)
+  -H <vizHeight>   Visualizer height px (default: 300)
+  -A <align>       Viz alignment: bottom|top|center (default: bottom)
+  -M <margin>      Margin from edge px (default: 0)
+  -B               Black strip behind viz (height = vizHeight, color black@1)
+  -m <mode>        Waveform mode: line|point|p2p (default: line)
+  -f <fps>         Viz FPS (default: 25)
+  -R <rectHeight>  Custom contrast-bar height px (0=off, default: 0)
+  -C <rectColor>   Contrast-bar color (default: black@0.45)
+  -K <palette>     Spectrum palette (e.g. intensity|rainbow) (default: intensity)
+  -b <abr>         Audio bitrate (native AAC) (default: 320k)
+  -s <sr>          Audio sample rate (default: 48000)
+  -Q <crf>         H.264 CRF (lower=better; default: 18)
+  -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
+  --auto-color     (waveform only) Auto-pick high-contrast color (needs ImageMagick)
+
+Examples:
+  mkyt
+  mkyt spectrum -B
+  mkyt waveform --auto-color -R 260 -C black@0.5
+  mkyt bars -H 260 -M 12 -B
+EOF
+}
+
+# ---------- helpers ----------
+auto_wave_color() {
+  if ! command -v convert >/dev/null 2>&1; then echo "0xFFFFFF"; return; fi
+  local rgb r g b yiq
+  rgb=$(convert "$cover" -resize 1x1\! -format "%[pixel:p{0,0}]" info:- 2>/dev/null || true)
+  r=$(echo "$rgb" | sed -n 's/.*(\([0-9]\+\),\([0-9]\+\),\([0-9]\+\).*/\1/p')
+  g=$(echo "$rgb" | sed -n 's/.*(\([0-9]\+\),\([0-9]\+\),\([0-9]\+\).*/\2/p')
+  b=$(echo "$rgb" | sed -n 's/.*(\([0-9]\+\),\([0-9]\+\),\([0-9]\+\).*/\3/p')
+  [[ -z "$r" || -z "$g" || -z "$b" ]] && { echo "0xFFFFFF"; return; }
+  yiq=$(( (299*r + 587*g + 114*b) / 1000 ))
+  if (( yiq > 140 )); then echo "0x000000"; else echo "0xFFFFFF"; fi
+}
+
+find_audio() {
+  shopt -s nullglob nocaseglob; local c=( *.wav ); shopt -u nocaseglob
+  (( ${#c[@]} )) || { echo ""; return; }
+  if (( ${#c[@]} == 1 )); then echo "${c[0]}"; return; fi
+  local newest="" newest_m=0 mt f
+  for f in "${c[@]}"; do mt=$(stat -f %m "$f" 2>/dev/null || echo 0); (( mt > newest_m )) && { newest_m=$mt; newest="$f"; }; done
+  echo "$newest"
+}
+
+find_cover() {
+  shopt -s nullglob nocaseglob
+  local prefer=( cover.jpg cover.jpeg cover.png folder.jpg folder.jpeg folder.png )
+  local f; for f in "${prefer[@]}"; do [[ -f "$f" ]] && { echo "$f"; shopt -u nocaseglob; return; }; done
+  local imgs=( *.jpg *.jpeg *.png ); shopt -u nocaseglob
+  (( ${#imgs[@]} )) || { echo ""; return; }
+  if (( ${#imgs[@]} == 1 )); then echo "${imgs[0]}"; return; fi
+  local newest="" newest_m=0 mt
+  for f in "${imgs[@]}"; do mt=$(stat -f %m "$f" 2>/dev/null || echo 0); (( mt > newest_m )) && { newest_m=$mt; newest="$f"; }; done
+  echo "$newest"
+}
+
+# ---------- defaults ----------
+viz="none"
+cover="" audio="" out=""
+width="" height="" user_set_dims=0
+vizh=300 align="bottom" margin=0 fps=25
+rect=0 rect_color="black@0.45" black_flag=0
+wf_mode="line" palette="intensity"
+abr="320k" sr=48000 crf=18 preset="medium" auto_color=0
+
+# --- pre-parse positional + long flags (so getopts won’t choke) ---
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    none|waveform|spectrum|bars) viz="$1"; shift ;;
+    --auto-color) auto_color=1; shift ;;
+    --) shift; break ;;                   # end of options
+    -*) break ;;                          # let getopts handle
+    *) echo "Unknown argument: $1"; usage; exit 2 ;;
+  esac
+done
+
+# --- short options via getopts ---
+OPTIND=1
+while getopts ":i:a:o:w:h:H:A:M:Bm:f:R:C:K:b:s:Q:P:" opt; do
+  case "$opt" in
+    i) cover="$OPTARG" ;;
+    a) audio="$OPTARG" ;;
+    o) out="$OPTARG" ;;
+    w) width="$OPTARG"; user_set_dims=1 ;;
+    h) height="$OPTARG"; user_set_dims=1 ;;
+    H) vizh="$OPTARG" ;;
+    A) align="$OPTARG" ;;
+    M) margin="$OPTARG" ;;
+    B) black_flag=1 ;;
+    m) wf_mode="$OPTARG" ;;
+    f) fps="$OPTARG" ;;
+    R) rect="$OPTARG" ;;
+    C) rect_color="$OPTARG" ;;
+    K) palette="$OPTARG" ;;
+    b) abr="$OPTARG" ;;
+    s) sr="$OPTARG" ;;
+    Q) crf="$OPTARG" ;;
+    P) preset="$OPTARG" ;;
+    \?) echo "Unknown option: -$OPTARG"; usage; exit 2 ;;
+    :)  echo "Option -$OPTARG requires an argument"; usage; exit 2 ;;
+  esac
+done
+shift $((OPTIND-1))
+
+# --- deps ---
+command -v ffmpeg  >/dev/null || { echo "ffmpeg not found. brew install ffmpeg"; exit 3; }
+command -v ffprobe >/dev/null || { echo "ffprobe not found (part of ffmpeg)"; exit 3; }
+
+# --- auto-detect files ---
+[[ -z "$audio" ]] && audio="$(find_audio)"
+[[ -z "$cover" ]] && cover="$(find_cover)"
+[[ -n "$audio" && -f "$audio" ]] || { echo "No WAV found. Put a .wav here or pass -a"; exit 5; }
+[[ -n "$cover" && -f "$cover" ]] || { echo "No cover image found. Add cover/folder.* or .jpg/.png, or pass -i"; exit 4; }
+
+# --- name & encoder ---
+audio_base="$(basename "$audio")"; title="${audio_base%.*}"
+[[ -z "$out" ]] && out="${title}.mp4"
+if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q 'libfdk_aac'; then
+  audio_args=(-c:a libfdk_aac -vbr 5 -ar "$sr")
+else
+  audio_args=(-c:a aac -b:a "$abr" -ar "$sr")
+fi
+
+# --- cover aspect → output size ---
+iw_ih=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$cover" || echo "")
+if [[ -n "$iw_ih" ]]; then
+  IFS="x" read -r iw ih <<<"$iw_ih"
+  if [[ $user_set_dims -eq 0 && ${iw:-0} -gt 0 && ${ih:-0} -gt 0 ]]; then
+    ar=$(awk "BEGIN { printf \"%.3f\", $iw/$ih }")
+    if   awk "BEGIN {exit !($ar>1.74 && $ar<1.82)}"; then width=1920; height=1080     # 16:9
+    elif awk "BEGIN {exit !($ar>1.32 && $ar<1.35)}"; then width=1440; height=1080     # 4:3
+    else width=1920; height=1080; fi
+  fi
+fi
+: "${width:=1920}"; : "${height:=1080}"
+
+# Show entire image, pad to fit output
+bgf="[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[bg];"
+
+# Y positions
+case "$align" in
+  bottom) bar_y="ih-${rect}-${margin}"; overlay_y="main_h-overlay_h-${margin}" ;;
+  top)    bar_y="${margin}";             overlay_y="${margin}" ;;
+  center) bar_y="(ih-${rect})/2";        overlay_y="(main_h-overlay_h)/2" ;;
+  *) echo "Invalid -A '$align' (use bottom|top|center)"; exit 2 ;;
+esac
+
+# -B → black strip the size of the viz
+(( black_flag )) && { rect="$vizh"; rect_color="black@1"; }
+
+# Visualizer filter
+vizf=""
+if [[ "$viz" == "waveform" ]]; then
+  wave_color="0xFFFFFF"; (( auto_color )) && wave_color="$(auto_wave_color)"
+  vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color}[viz];"
+elif [[ "$viz" == "spectrum" ]]; then
+  vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette}[viz];"
+elif [[ "$viz" == "bars" ]]; then
+  vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7[viz];"
+fi
+
+# Compose
+if [[ -n "$vizf" ]]; then
+  if (( rect > 0 )); then
+    barf="[bg]drawbox=x=0:y=${bar_y}:w=iw:h=${rect}:color=${rect_color}:t=fill[bg2];"
+    overlayf="[bg2][viz]overlay=0:${overlay_y}[v]"
+    filter_complex="${vizf}${bgf}${barf}${overlayf}"
+  else
+    overlayf="[bg][viz]overlay=0:${overlay_y}[v]"
+    filter_complex="${vizf}${bgf}${overlayf}"
+  fi
+else
+  filter_complex="${bgf}[bg]copy[v]"
+fi
+
+# Run
+ffmpeg -y -loop 1 -i "$cover" -i "$audio" \
+  -filter_complex "$filter_complex" -map "[v]" -map 1:a \
+  -c:v libx264 -tune stillimage -crf "$crf" -preset "$preset" -pix_fmt yuv420p \
+  "${audio_args[@]}" -metadata title="$title" \
+  -shortest -movflags +faststart "$out"
+
