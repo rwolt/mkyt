@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # mkyt — Make a YouTube-ready video from a WAV + cover image.
-# Defaults: no visualizer; auto-detect WAV & cover; auto-size by cover aspect.
+# Defaults: no visualizer; auto-detect WAV & cover; auto-size by cover aspect; never overwrite outputs.
 set -euo pipefail
 
 usage() {
@@ -20,12 +20,12 @@ Options (all optional):
   -A <align>       Viz alignment: bottom|top|center (default: bottom)
   -M <margin>      Margin from edge px (default: 0)
   -B               Black strip behind viz (height = vizHeight, color black@1)
+  -R <rectHeight>  Custom contrast-bar height px (0=off; default: 0)
+  -C <rectColor>   Contrast-bar color (default: black@0.45)
   -m <mode>        Waveform mode: line|point|p2p (default: line)
   -f <fps>         Viz FPS (default: 25)
-  -R <rectHeight>  Custom contrast-bar height px (0=off, default: 0)
-  -C <rectColor>   Contrast-bar color (default: black@0.45)
   -K <palette>     Spectrum palette (e.g. intensity|rainbow) (default: intensity)
-  -b <abr>         Audio bitrate (native AAC) (default: 320k)
+  -b <abr>         Audio bitrate for native AAC (default: 320k)
   -s <sr>          Audio sample rate (default: 48000)
   -Q <crf>         H.264 CRF (lower=better; default: 18)
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
@@ -71,6 +71,31 @@ find_cover() {
   local newest="" newest_m=0 mt
   for f in "${imgs[@]}"; do mt=$(stat -f %m "$f" 2>/dev/null || echo 0); (( mt > newest_m )) && { newest_m=$mt; newest="$f"; }; done
   echo "$newest"
+}
+
+# Return a unique path. If the given path exists, append " (1)", " (2)", ...
+make_unique_path() {
+  local p="$1"
+  [[ ! -e "$p" ]] && { echo "$p"; return; }
+
+  local dir file base ext candidate i
+  dir="${p%/*}"; [[ "$dir" == "$p" ]] && dir="."
+  file="${p##*/}"
+
+  if [[ "$file" == *.* ]]; then
+    base="${file%.*}"
+    ext=".${file##*.}"
+  else
+    base="$file"
+    ext=""
+  fi
+
+  i=1
+  while :; do
+    candidate="${dir}/${base} (${i})${ext}"
+    [[ ! -e "$candidate" ]] && { echo "$candidate"; return; }
+    ((i++))
+  done
 }
 
 # ---------- defaults ----------
@@ -131,9 +156,15 @@ command -v ffprobe >/dev/null || { echo "ffprobe not found (part of ffmpeg)"; ex
 [[ -n "$audio" && -f "$audio" ]] || { echo "No WAV found. Put a .wav here or pass -a"; exit 5; }
 [[ -n "$cover" && -f "$cover" ]] || { echo "No cover image found. Add cover/folder.* or .jpg/.png, or pass -i"; exit 4; }
 
-# --- name & encoder ---
+# --- name & encoder (no-overwrite safe) ---
 audio_base="$(basename "$audio")"; title="${audio_base%.*}"
 [[ -z "$out" ]] && out="${title}.mp4"
+orig_out="$out"
+out="$(make_unique_path "$out")"
+if [[ "$out" != "$orig_out" ]]; then
+  echo "Output exists: '${orig_out}' → using '${out}'"
+fi
+
 if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q 'libfdk_aac'; then
   audio_args=(-c:a libfdk_aac -vbr 5 -ar "$sr")
 else
@@ -153,7 +184,7 @@ if [[ -n "$iw_ih" ]]; then
 fi
 : "${width:=1920}"; : "${height:=1080}"
 
-# Show entire image, pad to fit output
+# Show entire image, pad to fit output (no cropping)
 bgf="[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[bg];"
 
 # Y positions
@@ -173,8 +204,10 @@ if [[ "$viz" == "waveform" ]]; then
   wave_color="0xFFFFFF"; (( auto_color )) && wave_color="$(auto_wave_color)"
   vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color}[viz];"
 elif [[ "$viz" == "spectrum" ]]; then
+  # smoother, scrolling spectrum
   vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette}[viz];"
 elif [[ "$viz" == "bars" ]]; then
+  # dance-style bars
   vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7[viz];"
 fi
 
@@ -192,8 +225,8 @@ else
   filter_complex="${bgf}[bg]copy[v]"
 fi
 
-# Run
-ffmpeg -y -loop 1 -i "$cover" -i "$audio" \
+# Run (never overwrite: -n)
+ffmpeg -n -loop 1 -i "$cover" -i "$audio" \
   -filter_complex "$filter_complex" -map "[v]" -map 1:a \
   -c:v libx264 -tune stillimage -crf "$crf" -preset "$preset" -pix_fmt yuv420p \
   "${audio_args[@]}" -metadata title="$title" \
