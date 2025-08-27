@@ -142,6 +142,7 @@ Options (all optional):
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
+  --viz-below       Stack visualizer under the cover (extends canvas; alias --spectro-below)
 Examples (covering every feature)
 1) No visualizer (default)
 bash
@@ -161,6 +162,8 @@ mkyt waveform --auto-color -B
 
 # different waveform look + smaller height + margin from edge
 mkyt waveform -m p2p -H 240 -M 12
+# stack waveform below the cover image
+mkyt waveform --viz-below -B
 3) Scrolling spectrum strip
 bash
 Copy
@@ -173,6 +176,8 @@ mkyt spectrum -K rainbow -H 280 -M 16 -B
 
 # place spectrum at the top
 mkyt spectrum -A top -B
+# stack spectrum below the cover image
+mkyt spectrum --viz-below -B
 4) Bar analyzer (“dance” look)
 bash
 Copy
@@ -180,6 +185,7 @@ Edit
 mkyt bars                        # default bars at bottom
 mkyt bars -H 260 -M 12 -B        # shorter with margin and black strip
 mkyt bars -A center              # centered bar block over image
+mkyt bars --viz-below -B         # stack bars below the cover image
 5) Placement, margins, and contrast bar
 bash
 Copy

@@ -33,6 +33,7 @@ Options (all optional):
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
+  --viz-below       Stack visualizer under the cover (extends canvas; alias --spectro-below)
 
 Examples:
   mkyt
@@ -109,6 +110,8 @@ vizh=300 align="bottom" margin=0 fps=25
 rect=0 rect_color="black@0.45" black_flag=0
 wf_mode="line" palette="intensity"
 spectro_scroll="scroll" spectro_center=0 spectro_vertical=0
+# place visualizer below cover
+viz_below=0
 abr="320k" sr=48000 crf=18 preset="medium" auto_color=0
 
 # --- pre-parse positional + long flags (so getopts won’t choke) ---
@@ -119,6 +122,7 @@ while [[ $# -gt 0 ]]; do
     --spectro-scroll) spectro_scroll="$2"; shift 2 ;;
     --spectro-center) spectro_center=1; shift ;;
     --spectro-vertical) spectro_vertical=1; shift ;;
+    --viz-below|--spectro-below) viz_below=1; shift ;;
     --) shift; break ;;                   # end of options
     -*) break ;;                          # let getopts handle
     *) echo "Unknown argument: $1"; usage; exit 2 ;;
@@ -191,16 +195,24 @@ if [[ -n "$iw_ih" ]]; then
 fi
 : "${width:=1920}"; : "${height:=1080}"
 
-# Show entire image, pad to fit output (no cropping)
-bgf="[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[bg];"
+if (( viz_below )); then
+  base_h=$height
+  height=$(( base_h + margin + vizh ))
+  bgf="[0:v]scale=${width}:${base_h}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:0[bg];"
+  bar_y=$(( base_h + margin ))
+  overlay_y=$bar_y
+else
+  # Show entire image, pad to fit output (no cropping)
+  bgf="[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[bg];"
 
-# Y positions
-case "$align" in
-  bottom) bar_y="ih-${rect}-${margin}"; overlay_y="main_h-overlay_h-${margin}" ;;
-  top)    bar_y="${margin}";             overlay_y="${margin}" ;;
-  center) bar_y="(ih-${rect})/2";        overlay_y="(main_h-overlay_h)/2" ;;
-  *) echo "Invalid -A '$align' (use bottom|top|center)"; exit 2 ;;
-esac
+  # Y positions
+  case "$align" in
+    bottom) bar_y="ih-${rect}-${margin}"; overlay_y="main_h-overlay_h-${margin}" ;;
+    top)    bar_y="${margin}";             overlay_y="${margin}" ;;
+    center) bar_y="(ih-${rect})/2";        overlay_y="(main_h-overlay_h)/2" ;;
+    *) echo "Invalid -A '$align' (use bottom|top|center)"; exit 2 ;;
+  esac
+fi
 
 # -B → black strip the size of the viz
 (( black_flag )) && { rect="$vizh"; rect_color="black@1"; }
