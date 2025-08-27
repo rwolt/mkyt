@@ -139,6 +139,9 @@ Options (all optional):
   -Q <crf>         H.264 CRF (lower=better; default: 18)
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
   --auto-color     (waveform only) Auto-pick high-contrast color (needs ImageMagick)
+  --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
+  --spectro-center  Center-out spectrum (new data at center)
+  --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
 Examples (covering every feature)
 1) No visualizer (default)
 bash

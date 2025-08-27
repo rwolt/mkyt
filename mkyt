@@ -30,6 +30,9 @@ Options (all optional):
   -Q <crf>         H.264 CRF (lower=better; default: 18)
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
   --auto-color     (waveform only) Auto-pick high-contrast color (needs ImageMagick)
+  --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
+  --spectro-center  Center-out spectrum (new data at center)
+  --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
 
 Examples:
   mkyt
@@ -105,6 +108,7 @@ width="" height="" user_set_dims=0
 vizh=300 align="bottom" margin=0 fps=25
 rect=0 rect_color="black@0.45" black_flag=0
 wf_mode="line" palette="intensity"
+spectro_scroll="scroll" spectro_center=0 spectro_vertical=0
 abr="320k" sr=48000 crf=18 preset="medium" auto_color=0
 
 # --- pre-parse positional + long flags (so getopts won’t choke) ---
@@ -112,6 +116,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     none|waveform|spectrum|bars) viz="$1"; shift ;;
     --auto-color) auto_color=1; shift ;;
+    --spectro-scroll) spectro_scroll="$2"; shift 2 ;;
+    --spectro-center) spectro_center=1; shift ;;
+    --spectro-vertical) spectro_vertical=1; shift ;;
     --) shift; break ;;                   # end of options
     -*) break ;;                          # let getopts handle
     *) echo "Unknown argument: $1"; usage; exit 2 ;;
@@ -204,8 +211,14 @@ if [[ "$viz" == "waveform" ]]; then
   wave_color="0xFFFFFF"; (( auto_color )) && wave_color="$(auto_wave_color)"
   vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color}[viz];"
 elif [[ "$viz" == "spectrum" ]]; then
-  # smoother, scrolling spectrum
-  vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette}[viz];"
+  # spectrum visualizer
+  viz_vertical=""
+  (( spectro_vertical )) && viz_vertical=",transpose=2"
+  if (( spectro_center )); then
+    vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];[s]hflip[sf];[s]crop=iw/2:ih:iw/2:0[right];[sf]crop=iw/2:ih:0:0[left];[left][right]hstack=inputs=2${viz_vertical}[viz];"
+  else
+    vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette}${viz_vertical}[viz];"
+  fi
 elif [[ "$viz" == "bars" ]]; then
   # dance-style bars
   vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7[viz];"
