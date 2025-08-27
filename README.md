@@ -27,97 +27,87 @@ Default = **no visualizer** (static cover). Opt-in **waveform**, **spectrum** (s
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 brew install ffmpeg imagemagick
+```
 MacPorts (alternative):
-
-bash
-Copy
-Edit
+```bash
 sudo port install ffmpeg ImageMagick
+```
 Linux
 Debian / Ubuntu:
-
-bash
-Copy
-Edit
+```bash
 sudo apt update
 sudo apt install -y ffmpeg imagemagick
+```
 Fedora:
-
-bash
-Copy
-Edit
+```bash
 sudo dnf install -y ffmpeg ImageMagick
+```
 Arch / Manjaro:
-
-bash
-Copy
-Edit
+```bash
 sudo pacman -S ffmpeg imagemagick
+```
 Windows
-mkyt is a Bash script. Use WSL (Ubuntu) or Git Bash.
+`mkyt` is a Bash script. Use WSL (Ubuntu) or Git Bash.
 
 WSL (Ubuntu):
-
-powershell
-Copy
-Edit
+```powershell
 wsl --install -d Ubuntu
 # inside Ubuntu:
 sudo apt update
 sudo apt install -y ffmpeg imagemagick
+```
 Git Bash + FFmpeg binaries:
 Install a static FFmpeg build and ensure ffmpeg.exe / ffprobe.exe are on PATH. ImageMagick is optional.
 
 Verify installs
-bash
-Copy
-Edit
+```bash
 ffmpeg -version
 ffprobe -version
 ffmpeg -hide_banner -filters | grep -E 'showwaves|showspectrum|showfreqs'   # should list all 3
 ffmpeg -hide_banner -encoders | grep -i aac                                # see if libfdk_aac is present (optional)
 convert -version                                                            # ImageMagick (optional)
+```
+
 Install the script
-Place the mkyt file wherever you like, make it executable, and put it on your PATH.
+Place the `mkyt` file wherever you like, make it executable, and put it on your PATH.
 
 Example (user bin + symlink):
-
-bash
-Copy
-Edit
+```bash
 chmod +x /path/to/mkyt
 mkdir -p ~/bin
 ln -s /path/to/mkyt ~/bin/mkyt
 # add once to ~/.zshrc or ~/.bashrc:
 echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc  # or: source ~/.bashrc
+```
 Check it’s visible:
-
-bash
-Copy
-Edit
+```bash
 which mkyt
 mkyt -h
+```
+
+---
+
 Quick start
 From a folder that contains one WAV and a cover image:
 
-bash
-Copy
-Edit
+```bash
 mkyt                    # static cover + audio, auto-detect, outputs "<wavname>.mp4"
 mkyt waveform           # add a waveform strip (bottom by default)
 mkyt spectrum           # add a scrolling spectrum strip (bottom)
 mkyt bars               # add a bar analyzer strip (bottom)
+```
+
 Output resolution auto-matches the cover aspect (16:9 → 1920×1080, 4:3 → 1440×1080; others padded).
 
 All options (at a glance)
-pgsql
-Copy
-Edit
+```pgsql
 mkyt [none|waveform|spectrum|bars] [options]
 
 Positional (optional):
   none|waveform|spectrum|bars   Visualizer mode (default: none)
+
+---
 
 Options (all optional):
   -i <cover>       Cover image (jpg/jpeg/png)
@@ -143,17 +133,17 @@ Options (all optional):
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
   --viz-below       Stack visualizer under the cover (extends canvas; alias --spectro-below)
+
+---
+
 Examples (covering every feature)
 1) No visualizer (default)
-bash
-Copy
-Edit
+```bash
 mkyt
 mkyt -o "My Track (Official Audio).mp4"
+```
 2) Waveform strip
-bash
-Copy
-Edit
+```bash
 # default line waveform at bottom
 mkyt waveform
 
@@ -164,10 +154,9 @@ mkyt waveform --auto-color -B
 mkyt waveform -m p2p -H 240 -M 12
 # stack waveform below the cover image
 mkyt waveform --viz-below -B
+```
 3) Scrolling spectrum strip
-bash
-Copy
-Edit
+```bash
 # readability boost: black strip = viz height
 mkyt spectrum -B
 
@@ -178,82 +167,73 @@ mkyt spectrum -K rainbow -H 280 -M 16 -B
 mkyt spectrum -A top -B
 # stack spectrum below the cover image
 mkyt spectrum --viz-below -B
+```
 4) Bar analyzer (“dance” look)
-bash
-Copy
-Edit
+```bash
 mkyt bars                        # default bars at bottom
 mkyt bars -H 260 -M 12 -B        # shorter with margin and black strip
 mkyt bars -A center              # centered bar block over image
 mkyt bars --viz-below -B         # stack bars below the cover image
+```
 5) Placement, margins, and contrast bar
-bash
-Copy
-Edit
+```bash
 # top placement with 16 px margin, translucent contrast bar
 mkyt waveform -A top -M 16 -R 200 -C black@0.5
 
 # centered visualizer (margin ignored in center mode)
 mkyt spectrum -A center -H 320 -B
+```
 6) Explicit files (skip auto-detect)
-bash
-Copy
-Edit
+```bash
 mkyt -i art.png -a mixdown.wav -o release.mp4
+```
 7) Override output size (ignore auto aspect)
-bash
-Copy
-Edit
+```bash
 mkyt waveform -w 2560 -h 1440 -H 340 -B
+```
 8) Tuning performance / quality
-bash
-Copy
-Edit
+```bash
 # Faster encode (bigger files)
 mkyt -Q 20 -P fast
 
 # Slower, smaller (same visual quality)
 mkyt -Q 18 -P slow
+```
 9) Audio settings
-bash
-Copy
-Edit
+```bash
 # Defaults: AAC-LC 320k @ 48kHz (uses libfdk_aac VBR 5 if available)
 mkyt
 
 # Force different bitrate or sample rate
 mkyt -b 256k -s 48000
+```
+---
+
 How it works (internals in one breath)
 Cover is scaled to show the entire image and padded to the chosen output size.
 
-Visualizers use FFmpeg filters:
+- Visualizers use FFmpeg filters:
+    - `showwaves` (waveform; supports custom color, modes line|point|p2p)
+    - `showspectrum` (scrolling spectrogram with slide=scroll, Hann window, overlap 0.8)
+    - `showfreqs` (bar analyzer with log frequency scaling)
 
-showwaves (waveform; supports custom color, modes line|point|p2p)
+- `--auto-color` samples the average cover color (ImageMagick) and chooses black/white for best contrast.
 
-showspectrum (scrolling spectrogram with slide=scroll, Hann window, overlap 0.8)
+- Audio is encoded with **libfdk_aac** VBR 5 if present; otherwise FFmpeg’s native AAC-LC at your chosen bitrate.
 
-showfreqs (bar analyzer with log frequency scaling)
-
---auto-color samples the average cover color (ImageMagick) and chooses black/white for best contrast.
-
-Audio is encoded with libfdk_aac VBR 5 if present; otherwise FFmpeg’s native AAC-LC at your chosen bitrate.
+---
 
 Tips for YouTube audio
-Master/export your track to WAV/AIFF 48 kHz.
+- Master/export your track to WAV/AIFF 48 kHz.
+- Upload H.264 + AAC-LC 320 kbps, 48 kHz. YouTube will re-encode anyway; this avoids extra losses.
+- Keep `-pix_fmt yuv420p` for universal playback.
 
-Upload H.264 + AAC-LC 320 kbps, 48 kHz. YouTube will re-encode anyway; this avoids extra losses.
-
-Keep -pix_fmt yuv420p for universal playback.
+---
 
 Troubleshooting
-ffmpeg: command not found → install FFmpeg (see above).
-
-ffprobe: command not found → install FFmpeg (ffprobe ships with it).
-
-No WAV / No cover found → place files in the folder, or pass -a / -i.
-
---auto-color not working → install ImageMagick (convert cmd).
-
-Palette not recognized → your FFmpeg may not support that palette; use default -K intensity.
-
-Performance → raise -Q (e.g., 20–22) or use faster -P fast.
+- `ffmpeg: command not found` → install FFmpeg (see above).
+- `ffprobe: command not found` → install FFmpeg (ffprobe ships with it).
+- No WAV / No cover found → place files in the folder, or pass -a / -i.
+- `--auto-color` not working → install ImageMagick (convert cmd).
+- Palette not recognized → your FFmpeg may not support that palette; use default -K intensity.
+- Performance → raise -Q (e.g., 20–22) or use faster -P fast.
