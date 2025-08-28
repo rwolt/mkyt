@@ -255,5 +255,5 @@ ffmpeg -n -loop 1 -i "$cover" -i "$audio" \
   -filter_complex "$filter_complex" -map "[v]" -map 1:a \
   -c:v libx264 -tune stillimage -crf "$crf" -preset "$preset" -pix_fmt yuv420p \
   "${audio_args[@]}" -metadata title="$title" \
-  -shortest -movflags +faststart "$out"
+  -shortest -movflags +faststart -- "$out"
 
