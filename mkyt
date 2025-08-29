@@ -75,6 +75,16 @@ is_hex_color() {
   [[ "$x" =~ ^#?[0-9A-Fa-f]{6}$ ]]
 }
 
+# Extract a #RRGGBB from a tiny JSON blob by key
+json_get_hex() {
+  local key="$1" js="$2" out
+  out=$(printf '%s' "$js" | sed -E -n "s/.*\"${key}\":\"(#?[0-9A-Fa-f]{6})\".*/\\1/p")
+  if [[ -z "$out" ]]; then
+    out=$(printf '%s' "$js" | awk -v k="$key" 'match($0, ("\\\""k"\\\":\\\"#?[0-9A-Fa-f]{6}\\\"")){ s=substr($0,RSTART,RLENGTH); sub(/.*:\"/,"",s); sub(/\"$/,"",s); print s }')
+  fi
+  printf '%s\n' "$out"
+}
+
 make_gradient_lut() {
   # Print a 256-entry LUT (one channel) blending accent -> on_accent
   # Usage: make_gradient_lut "#RRGGBB" "#RRGGBB" [r|g|b]
@@ -181,15 +191,15 @@ load_palette() {
   local js
   js=$(extract_palette "$cover" "$palette_colors")
   dbg "extract_palette JSON: $js"
-  # Robust JSON field extraction using awk (ERE)
-  ACCENT_HEX=$(echo "$js" | awk 'match($0, /"accent_hex":"#?[0-9A-Fa-f]{6}"/){ s=substr($0,RSTART,RLENGTH); sub(/.*:"/,"",s); sub(/"$/,"",s); print s }')
-  COMPLEMENT_HEX=$(echo "$js" | awk 'match($0, /"complement_hex":"#?[0-9A-Fa-f]{6}"/){ s=substr($0,RSTART,RLENGTH); sub(/.*:"/,"",s); sub(/"$/,"",s); print s }')
-  ON_ACCENT_HEX=$(echo "$js" | awk 'match($0, /"on_accent_hex":"#?[0-9A-Fa-f]{6}"/){ s=substr($0,RSTART,RLENGTH); sub(/.*:"/,"",s); sub(/"$/,"",s); print s }')
+  ACCENT_HEX=$(json_get_hex accent_hex "$js")
+  COMPLEMENT_HEX=$(json_get_hex complement_hex "$js")
+  ON_ACCENT_HEX=$(json_get_hex on_accent_hex "$js")
   # Validate; fallback to sensible defaults if parsing failed
-  is_hex_color "$ACCENT_HEX" || ACCENT_HEX="#FFFFFF"
-  is_hex_color "$COMPLEMENT_HEX" || COMPLEMENT_HEX="#000000"
-  is_hex_color "$ON_ACCENT_HEX" || ON_ACCENT_HEX="#000000"
-  dbg "palette ACCENT=$ACCENT_HEX COMPLEMENT=$COMPLEMENT_HEX ON=$ON_ACCENT_HEX"
+  local acc_ok=1 comp_ok=1 on_ok=1
+  if ! is_hex_color "$ACCENT_HEX"; then acc_ok=0; ACCENT_HEX="#FFFFFF"; fi
+  if ! is_hex_color "$COMPLEMENT_HEX"; then comp_ok=0; COMPLEMENT_HEX="#000000"; fi
+  if ! is_hex_color "$ON_ACCENT_HEX"; then on_ok=0; ON_ACCENT_HEX="#000000"; fi
+  dbg "palette parsed ACCENT=${ACCENT_HEX} (ok=${acc_ok}) COMPLEMENT=${COMPLEMENT_HEX} (ok=${comp_ok}) ON=${ON_ACCENT_HEX} (ok=${on_ok})"
   export ACCENT_HEX COMPLEMENT_HEX ON_ACCENT_HEX
 }
 auto_wave_color() {
