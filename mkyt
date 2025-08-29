@@ -29,7 +29,7 @@ Options (all optional):
   -s <sr>          Audio sample rate (default: 48000)
   -Q <crf>         H.264 CRF (lower=better; default: 18)
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
-  --auto-color     (waveform only) Auto-pick high-contrast color (needs ImageMagick)
+  --auto-color[=auto|accent|complement|on]  Auto color (waveform & bars). Default: auto
   --debug-palette  Print extracted palette JSON and exit
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
@@ -50,6 +50,16 @@ hex_to_ffmpeg() {
   local h="${1#\#}"
   h=$(echo "$h" | tr '[:lower:]' '[:upper:]')
   printf '0x%s\n' "$h"
+}
+
+hex_to_unit_rgb() {
+  # Convert #RRGGBB to three 0..1 floats: R G B
+  local h="${1#\#}"
+  local r g b
+  r=$((16#${h:0:2}))
+  g=$((16#${h:2:2}))
+  b=$((16#${h:4:2}))
+  awk -v r="$r" -v g="$g" -v b="$b" 'BEGIN{ printf "%.6f %.6f %.6f\n", r/255.0, g/255.0, b/255.0 }'
 }
 
 make_gradient_lut() {
@@ -149,6 +159,19 @@ extract_palette() {
            fmthex(bestR,bestG,bestB), fmthex(crgb[1],crgb[2],crgb[3]), fmthex(onR,onG,onB), fmthex(bestR,bestG,bestB), fmthex(onR,onG,onB), mode);
   }'
 }
+
+# Load palette once and export variables for reuse
+load_palette() {
+  if [[ -n "${ACCENT_HEX:-}" && -n "${COMPLEMENT_HEX:-}" && -n "${ON_ACCENT_HEX:-}" ]]; then
+    return 0
+  fi
+  local js
+  js=$(extract_palette "$cover" "$palette_colors")
+  ACCENT_HEX=$(echo "$js" | sed -n 's/.*"accent_hex":"\(#\?[0-9A-Fa-f]\{6\}\)".*/\1/p')
+  COMPLEMENT_HEX=$(echo "$js" | sed -n 's/.*"complement_hex":"\(#\?[0-9A-Fa-f]\{6\}\)".*/\1/p')
+  ON_ACCENT_HEX=$(echo "$js" | sed -n 's/.*"on_accent_hex":"\(#\?[0-9A-Fa-f]\{6\}\)".*/\1/p')
+  export ACCENT_HEX COMPLEMENT_HEX ON_ACCENT_HEX
+}
 auto_wave_color() {
   if ! command -v convert >/dev/null 2>&1; then echo "0xFFFFFF"; return; fi
   local rgb r g b yiq
@@ -220,12 +243,22 @@ viz_below=0
 abr="320k" sr=48000 crf=18 preset="medium" auto_color=0
 debug_palette=0
 palette_colors="${MKYT_PALETTE_COLORS:-8}"
+auto_color_mode="auto"
 
 # --- pre-parse positional + long flags (so getopts won’t choke) ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
     none|waveform|spectrum|bars) viz="$1"; shift ;;
-    --auto-color) auto_color=1; shift ;;
+    --auto-color|--auto-color=*)
+      auto_color=1
+      if [[ "$1" == --auto-color ]]; then
+        auto_color_mode="auto"
+        shift
+      else
+        auto_color_mode="${1#--auto-color=}"
+        shift
+      fi
+      ;;
     --debug-palette) debug_palette=1; shift ;;
     --spectro-scroll) spectro_scroll="$2"; shift 2 ;;
     --spectro-center) spectro_center=1; shift ;;
@@ -333,8 +366,34 @@ fi
 
 # Visualizer filter
 vizf=""
+
+# helper to check if a solid black strip is active
+black_strip_active() {
+  if (( black_flag )); then return 0; fi
+  local rc rc_l
+  rc="$rect_color"; rc_l=$(echo "$rc" | tr '[:upper:]' '[:lower:]')
+  if (( rect == vizh )) && [[ "$rc_l" == "black@1" ]]; then return 0; fi
+  return 1
+}
+
+# Resolve selected hex from palette and mode
+resolve_auto_hex() {
+  load_palette
+  local mode="$1"
+  case "$mode" in
+    accent) echo "$ACCENT_HEX" ;;
+    complement) echo "$COMPLEMENT_HEX" ;;
+    on) echo "$ON_ACCENT_HEX" ;;
+    auto|*)
+      if black_strip_active; then echo "$ACCENT_HEX"; else echo "$COMPLEMENT_HEX"; fi ;;
+  esac
+}
 if [[ "$viz" == "waveform" ]]; then
-  wave_color="0xFFFFFF"; (( auto_color )) && wave_color="$(auto_wave_color)"
+  wave_color="0xFFFFFF"
+  if (( auto_color )); then
+    wave_hex=$(resolve_auto_hex "$auto_color_mode")
+    wave_color="$(hex_to_ffmpeg "$wave_hex")"
+  fi
   vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color},format=rgba[viz];"
 elif [[ "$viz" == "spectrum" ]]; then
   # spectrum visualizer
@@ -346,8 +405,14 @@ elif [[ "$viz" == "spectrum" ]]; then
     vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette}${viz_vertical},format=rgba[viz];"
   fi
 elif [[ "$viz" == "bars" ]]; then
-  # dance-style bars
-  vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7,format=rgba[viz];"
+  if (( auto_color )); then
+    bar_hex=$(resolve_auto_hex "$auto_color_mode")
+    read -r rr gg bb <<<"$(hex_to_unit_rgb "$bar_hex")"
+    vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:win_size=4096:overlap=0.75,format=rgba[b0];[b0]format=rgba[bgray];[bgray]colorchannelmixer=rr=${rr}:gg=${gg}:bb=${bb},format=rgba[viz];"
+  else
+    # back-compat default colored bars
+    vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7,format=rgba[viz];"
+  fi
 fi
 
 # Compose
