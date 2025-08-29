@@ -409,7 +409,8 @@ if [[ "$viz" == "waveform" ]]; then
       wave_color="$(auto_wave_color)"
     fi
   fi
-  vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color},format=rgba[viz];"
+  # Duplicate color for both channels to avoid default white on one channel
+  vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color}|${wave_color},format=rgba[viz];"
 elif [[ "$viz" == "spectrum" ]]; then
   # spectrum visualizer
   viz_vertical=""
