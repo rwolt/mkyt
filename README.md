@@ -12,7 +12,7 @@ Default = **no visualizer** (static cover). Opt-in **waveform**, **spectrum** (s
 - 🏷️ Sets MP4 **title** metadata from the WAV filename
 - 🔊 Exports AAC @ 48 kHz (uses `libfdk_aac` if available, else native AAC)
 - 🎚️ Optional bottom/top/center **waveform**, **scrolling spectrum**, or **bar analyzer**
-- 🎨 Optional **auto-contrast waveform color** vs cover (`--auto-color`, needs ImageMagick)
+- 🎨 Palette-driven auto color for waveform & bars (`--auto-color[=auto|accent|complement|on|dual]`)
 
 ---
 
@@ -128,7 +128,8 @@ Options (all optional):
   -s <sr>          Audio sample rate (default: 48000)
   -Q <crf>         H.264 CRF (lower=better; default: 18)
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
-  --auto-color     (waveform only) Auto-pick high-contrast color (needs ImageMagick)
+  --auto-color[=auto|accent|complement|on|dual]  Palette auto-color (waveform & bars). Default: auto
+  --debug-palette  Print extracted palette JSON and exit
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
@@ -148,8 +149,24 @@ mkyt -o "My Track (Official Audio).mp4"
 # default line waveform at bottom
 mkyt waveform
 
-# auto-contrast color vs cover (needs ImageMagick), with a solid black strip behind
+# Palette auto-color (needs ImageMagick):
+# - auto picks complement over artwork, or accent over a solid black strip (-B)
+mkyt waveform --auto-color
+
+# Prefer accent on a black strip for pop
 mkyt waveform --auto-color -B
+
+# Force complement or accent explicitly
+mkyt waveform --auto-color=complement
+mkyt waveform --auto-color=accent
+
+# Use on-accent (black/white chosen for contrast over the accent)
+mkyt waveform --auto-color=on -B
+
+# Dual color: primary|secondary per channel (auto swaps on black strip)
+# - Over artwork: complement|accent
+# - On black strip: accent|complement
+mkyt waveform --auto-color=dual
 
 # different waveform look + smaller height + margin from edge
 mkyt waveform -m p2p -H 240 -M 12
@@ -175,6 +192,15 @@ mkyt bars                        # default bars at bottom
 mkyt bars -H 260 -M 12 -B        # shorter with margin and black strip
 mkyt bars -A center              # centered bar block over image
 mkyt bars --viz-below -B         # stack bars below the cover image
+
+# Palette auto-color tints bars (grayscale → tint):
+mkyt bars --auto-color           # complement tint over artwork
+mkyt bars --auto-color -B        # accent tint on black strip
+mkyt bars --auto-color=complement
+mkyt bars --auto-color=accent
+
+# Dual tint: blend of primary and secondary tints (screen blend)
+mkyt bars --auto-color=dual      # complement+accent over artwork (accent+complement on black strip)
 ```
 ### 5) Placement, margins, and contrast bar
 ```bash
@@ -216,8 +242,18 @@ mkyt -b 256k -s 48000
     - `showwaves` (waveform; supports custom color, modes line|point|p2p)
     - `showspectrum` (scrolling spectrogram with slide=scroll, Hann window, overlap 0.8)
     - `showfreqs` (bar analyzer with log frequency scaling)
+ 
+- Palette extraction (Monet-like): the cover is quantized (ImageMagick), near-neutrals/extremes are filtered out, and colors are scored
+  by presence and saturation with a mid-lightness bias. We return:
+  - `accent_hex`: expressive primary from the cover
+  - `complement_hex`: hue-rotated 180° of accent (L clamped to [0.4, 0.7])
+  - `on_accent_hex`: black/white chosen by relative luminance of the accent
+  - `gradient`: [accent → on_accent]
 
-- `--auto-color` samples the average cover color (ImageMagick) and chooses black/white for best contrast.
+- Auto-color modes:
+  - `auto`: complement over artwork; accent if a solid black strip is active (`-B` or `-R`=viz height with `-C black@1`).
+  - `accent|complement|on`: explicit selection.
+  - `dual`: uses primary|secondary (complement|accent over artwork; accent|complement on black strip). Waveform colors L|R; bars blend both tints.
 
 - Audio is encoded with **libfdk_aac** VBR 5 if present; otherwise FFmpeg’s native AAC-LC at your chosen bitrate.
 
@@ -234,6 +270,9 @@ mkyt -b 256k -s 48000
 - `ffmpeg: command not found` → install FFmpeg (see above).
 - `ffprobe: command not found` → install FFmpeg (ffprobe ships with it).
 - No WAV / No cover found → place files in the folder, or pass -a / -i.
-- `--auto-color` not working → install ImageMagick (convert cmd).
+- `--auto-color` not working → install ImageMagick (`convert`/`magick`).
+- Palette seems off → run `mkyt --debug-palette`.
+- See what mkyt decided → set `MKYT_DEBUG=1` to log palette values, chosen modes, and filter strings.
+- Need more color clusters → set `MKYT_PALETTE_COLORS=16` when debugging palette.
 - Palette not recognized → your FFmpeg may not support that palette; use default -K intensity.
 - Performance → raise -Q (e.g., 20–22) or use faster -P fast.
