@@ -36,7 +36,7 @@ Options (all optional):
   -s <sr>          Audio sample rate (default: 48000)
   -Q <crf>         H.264 CRF (lower=better; default: 18)
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
-  --auto-color[=auto|accent|complement|on]  Auto color (waveform & bars). Default: auto
+  --auto-color[=auto|accent|complement|on|dual]  Auto color (waveform & bars). Default: auto
   --debug-palette  Print extracted palette JSON and exit
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
@@ -419,20 +419,48 @@ resolve_auto_hex() {
       if black_strip_active; then dbg "auto-color: black strip → accent"; echo "$ACCENT_HEX"; else dbg "auto-color: over artwork → complement"; echo "$COMPLEMENT_HEX"; fi ;;
   esac
 }
+
+# Resolve a primary/secondary hex pair for dual mode
+resolve_dual_hexes() {
+  load_palette
+  local primary secondary
+  if black_strip_active; then
+    primary="$ACCENT_HEX"; secondary="$COMPLEMENT_HEX"; dbg "dual-color: black strip → primary=accent secondary=complement";
+  else
+    primary="$COMPLEMENT_HEX"; secondary="$ACCENT_HEX"; dbg "dual-color: over artwork → primary=complement secondary=accent";
+  fi
+  printf '%s %s\n' "$primary" "$secondary"
+}
 if [[ "$viz" == "waveform" ]]; then
   wave_color="0xFFFFFF"
   if (( auto_color )); then
-    wave_hex=$(resolve_auto_hex "$auto_color_mode")
-    if is_hex_color "$wave_hex"; then
-      wave_color="$(hex_to_ffmpeg "$wave_hex")"
+    if [[ "$auto_color_mode" == "dual" ]]; then
+      read -r pri_hex sec_hex <<<"$(resolve_dual_hexes)"
+      if is_hex_color "$pri_hex" && is_hex_color "$sec_hex"; then
+        wave_color_pri="$(hex_to_ffmpeg "$pri_hex")"
+        wave_color_sec="$(hex_to_ffmpeg "$sec_hex")"
+      else
+        # Fallback: both channels same legacy color
+        wave_color_pri="$(auto_wave_color)"; wave_color_sec="$wave_color_pri"
+      fi
+      dbg "waveform: mode=dual primary=$pri_hex secondary=$sec_hex colors=${wave_color_pri}|${wave_color_sec}"
     else
-      # Fallback to legacy detector if palette parse fails
-      wave_color="$(auto_wave_color)"
+      wave_hex=$(resolve_auto_hex "$auto_color_mode")
+      if is_hex_color "$wave_hex"; then
+        wave_color="$(hex_to_ffmpeg "$wave_hex")"
+      else
+        # Fallback to legacy detector if palette parse fails
+        wave_color="$(auto_wave_color)"
+      fi
+      dbg "waveform: mode=$auto_color_mode wave_hex=$wave_hex wave_color=$wave_color"
     fi
-    dbg "waveform: mode=$auto_color_mode wave_hex=$wave_hex wave_color=$wave_color"
   fi
   # Duplicate color for both channels to avoid default white on one channel
-  vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color}|${wave_color},format=rgba[viz];"
+  if (( auto_color )) && [[ "$auto_color_mode" == "dual" ]]; then
+    vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color_pri}|${wave_color_sec},format=rgba[viz];"
+  else
+    vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color}|${wave_color},format=rgba[viz];"
+  fi
   dbg "waveform vizf: $vizf"
 elif [[ "$viz" == "spectrum" ]]; then
   # spectrum visualizer
@@ -445,14 +473,26 @@ elif [[ "$viz" == "spectrum" ]]; then
   fi
 elif [[ "$viz" == "bars" ]]; then
   if (( auto_color )); then
-    bar_hex=$(resolve_auto_hex "$auto_color_mode")
-    if is_hex_color "$bar_hex"; then
-      read -r rr gg bb <<<"$(hex_to_unit_rgb "$bar_hex")"
-      vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:win_size=4096:overlap=0.75,format=rgba[b0];[b0]hue=s=0[bgray];[bgray]colorchannelmixer=rr=${rr}:gg=${gg}:bb=${bb},format=rgba[viz];"
-      dbg "bars: mode=$auto_color_mode bar_hex=$bar_hex unit=${rr},${gg},${bb}"
+    if [[ "$auto_color_mode" == "dual" ]]; then
+      read -r pri_hex sec_hex <<<"$(resolve_dual_hexes)"
+      if is_hex_color "$pri_hex" && is_hex_color "$sec_hex"; then
+        read -r pr pg pb <<<"$(hex_to_unit_rgb "$pri_hex")"
+        read -r sr sg sb <<<"$(hex_to_unit_rgb "$sec_hex")"
+        vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:win_size=4096:overlap=0.75,format=rgba[b0];[b0]hue=s=0[bgray];[bgray]split=2[g0][g1];[g0]colorchannelmixer=rr=${pr}:gg=${pg}:bb=${pb}[c0];[g1]colorchannelmixer=rr=${sr}:gg=${sg}:bb=${sb}[c1];[c0][c1]blend=all_mode=screen:all_opacity=0.45,format=rgba[viz];"
+        dbg "bars: mode=dual primary=$pri_hex secondary=$sec_hex unitsP=${pr},${pg},${pb} unitsS=${sr},${sg},${sb}"
+      else
+        vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7,format=rgba[viz];"
+      fi
     else
-      # back-compat default colored bars
-      vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7,format=rgba[viz];"
+      bar_hex=$(resolve_auto_hex "$auto_color_mode")
+      if is_hex_color "$bar_hex"; then
+        read -r rr gg bb <<<"$(hex_to_unit_rgb "$bar_hex")"
+        vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:win_size=4096:overlap=0.75,format=rgba[b0];[b0]hue=s=0[bgray];[bgray]colorchannelmixer=rr=${rr}:gg=${gg}:bb=${bb},format=rgba[viz];"
+        dbg "bars: mode=$auto_color_mode bar_hex=$bar_hex unit=${rr},${gg},${bb}"
+      else
+        # back-compat default colored bars
+        vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7,format=rgba[viz];"
+      fi
     fi
     dbg "bars vizf: $vizf"
   else
