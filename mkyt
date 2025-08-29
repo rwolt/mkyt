@@ -30,6 +30,7 @@ Options (all optional):
   -Q <crf>         H.264 CRF (lower=better; default: 18)
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
   --auto-color     (waveform only) Auto-pick high-contrast color (needs ImageMagick)
+  --debug-palette  Print extracted palette JSON and exit
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
@@ -44,6 +45,110 @@ EOF
 }
 
 # ---------- helpers ----------
+hex_to_ffmpeg() {
+  # Convert hex to ffmpeg 0xRRGGBB
+  local h="${1#\#}"
+  h=$(echo "$h" | tr '[:lower:]' '[:upper:]')
+  printf '0x%s\n' "$h"
+}
+
+make_gradient_lut() {
+  # Print a 256-entry LUT (one channel) blending accent -> on_accent
+  # Usage: make_gradient_lut "#RRGGBB" "#RRGGBB" [r|g|b]
+  local a="${1#\#}" b="${2#\#}" channel="${3:-r}" s e
+  a=$(echo "$a" | tr '[:lower:]' '[:upper:]')
+  b=$(echo "$b" | tr '[:lower:]' '[:upper:]')
+  local ar ag ab br bg bb
+  ar=$((16#${a:0:2})); ag=$((16#${a:2:2})); ab=$((16#${a:4:2}))
+  br=$((16#${b:0:2})); bg=$((16#${b:2:2})); bb=$((16#${b:4:2}))
+  case "$channel" in
+    r) s=$ar; e=$br ;;
+    g) s=$ag; e=$bg ;;
+    b) s=$ab; e=$bb ;;
+    *) echo "Unknown channel '$channel' (use r|g|b)" >&2; return 2 ;;
+  esac
+  awk -v s="$s" -v e="$e" 'BEGIN{ for(i=0;i<256;i++){ v=s + (e-s)*i/255.0; printf("%d\n", (v<0?0:(v>255?255:int(v+0.5)))) } }'
+}
+
+extract_palette() {
+  # Robust palette extractor modeled after Android Monet
+  # Usage: extract_palette <cover_path> [N]
+  # Prints JSON: {accent_hex, complement_hex, on_accent_hex, gradient:[accent,on_accent], fallback, fallback_reason}
+  local cover_path="$1" N="${2:-8}"
+  if ! command -v convert >/dev/null 2>&1; then
+    printf '{"accent_hex":"#FFFFFF","complement_hex":"#000000","on_accent_hex":"#000000","gradient":["#FFFFFF","#000000"],"fallback":true,"fallback_reason":"no_imagemagick"}\n'
+    return 0
+  fi
+  local hist pairs imcmd
+  imcmd="convert"
+  if command -v magick >/dev/null 2>&1; then imcmd="magick"; fi
+  # Force sRGB, disable alpha and dithering to get stable buckets
+  hist=$($imcmd "$cover_path" -colorspace sRGB -alpha off -resize 256x256\! +dither -colors "$N" -format %c histogram:info:- 2>/dev/null || true)
+  # BSD sed compatibility: avoid \+; use [0-9][0-9]*
+  pairs=$(echo "$hist" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\):.*#\([0-9A-Fa-f]\{6\}\).*/\1 \2/p')
+  if [[ -z "$pairs" ]]; then
+    printf '{"accent_hex":"#FFFFFF","complement_hex":"#000000","on_accent_hex":"#000000","gradient":["#FFFFFF","#000000"],"fallback":true,"fallback_reason":"no_histogram"}\n'
+    return 0
+  fi
+  echo "$pairs" | awk '
+  function hexval(c,   hex) { hex="0123456789ABCDEF"; c=toupper(c); return index(hex,c)-1; }
+  function hex2int(h,   i,v) { v=0; for(i=1;i<=length(h);i++){ v = v*16 + hexval(substr(h,i,1)); } return v; }
+  function hex2rgb(h,   r,g,b) { r = hex2int(substr(h,1,2)); g = hex2int(substr(h,3,2)); b = hex2int(substr(h,5,2)); return r "," g "," b; }
+  function rgb2hsl(r,g,b,   rf,gf,bf,max,min,delta,h,s,l) {
+    rf=r/255.0; gf=g/255.0; bf=b/255.0;
+    max=rf; if(gf>max)max=gf; if(bf>max)max=bf;
+    min=rf; if(gf<min)min=gf; if(bf<min)min=bf;
+    l=(max+min)/2.0;
+    if(max==min){ h=0; s=0; }
+    else{
+      delta=max-min;
+      s = (l>0.5) ? delta/(2.0-max-min) : delta/(max+min);
+      if(max==rf){ h=(gf-bf)/delta + (gf<bf?6:0); }
+      else if(max==gf){ h=(bf-rf)/delta + 2; }
+      else{ h=(rf-gf)/delta + 4; }
+      h*=60.0;
+    }
+    return h "," s "," l;
+  }
+  function hue2rgb(p,q,t){ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6.0)return p+(q-p)*6*t; if(t<1/2.0)return q; if(t<2/3.0)return p+(q-p)*(2/3.0-t)*6; return p; }
+  function hsl2rgb(h,s,l,   r,g,b,q,p,hr) {
+    if(s==0){ r=g=b=l; }
+    else{ q = (l<0.5)? l*(1+s) : l+s-l*s; p = 2*l-q; hr=h/360.0; r=hue2rgb(p,q,hr+1/3.0); g=hue2rgb(p,q,hr); b=hue2rgb(p,q,hr-1/3.0); }
+    return int(r*255+0.5) "," int(g*255+0.5) "," int(b*255+0.5);
+  }
+  function fmthex(r,g,b){ return sprintf("#%02X%02X%02X", r,g,b); }
+  function lin(c,   t){ c/=255.0; if(c<=0.04045) return c/12.92; t=(c+0.055)/1.055; return exp(2.4*log(t)); }
+  function rel_luma(r,g,b,   R,G,B){ R=lin(r); G=lin(g); B=lin(b); return 0.2126*R+0.7152*G+0.0722*B; }
+  BEGIN{ FS=" "; bestStrict=-1; bestRelax=-1; bestAny=-1; }
+  NF==2{
+    cnt=$1; hex=toupper($2);
+    split(hex2rgb(hex), rgb, ","); r=rgb[1]+0; g=rgb[2]+0; b=rgb[3]+0;
+    split(rgb2hsl(r,g,b), hsl, ","); h=hsl[1]+0; s=hsl[2]+0; l=hsl[3]+0;
+    mid = (l>=0.3 && l<=0.7) ? 1.0 : 0.5;
+    s_pow = (s>0? exp(1.5*log(s)) : 0);
+    base = cnt * s_pow * (0.5 + 0.5*mid);
+
+    if(s>=0.25 && l>=0.15 && l<=0.85){ if(base>bestStrict){ bestStrict=base; sR=r; sG=g; sB=b; sH=h; sS=s; sL=l; } }
+    if(s>=0.18 && l>=0.12 && l<=0.88){ if(base>bestRelax){ bestRelax=base; rR=r; rG=g; rB=b; rH=h; rS=s; rL=l; } }
+    if(s>0.03){ if(base>bestAny){ bestAny=base; aR=r; aG=g; aB=b; aH=h; aS=s; aL=l; } }
+  }
+  END{
+    mode="";
+    if(bestStrict>0){ bestR=sR; bestG=sG; bestB=sB; bestH=sH; bestS=sS; bestL=sL; mode="strict"; }
+    else if(bestRelax>0){ bestR=rR; bestG=rG; bestB=rB; bestH=rH; bestS=rS; bestL=rL; mode="relaxed"; }
+    else if(bestAny>0){ bestR=aR; bestG=aG; bestB=aB; bestH=aH; bestS=aS; bestL=aL; mode="best_available"; }
+    else { printf("{\"accent_hex\":\"#FFFFFF\",\"complement_hex\":\"#000000\",\"on_accent_hex\":\"#000000\",\"gradient\":[\"#FFFFFF\",\"#000000\"],\"fallback\":true,\"fallback_reason\":\"no_candidates\"}\n"); exit; }
+
+    y = rel_luma(bestR,bestG,bestB);
+    onR = (y>0.5)? 0 : 255; onG = onR; onB = onR;
+    compH = bestH + 180.0; if(compH>=360) compH-=360;
+    compL = (bestL<0.4)?0.4:((bestL>0.7)?0.7:bestL);
+    split(hsl2rgb(compH, bestS, compL), crgb, ",");
+    if(length(mode)==0) mode="strict";
+    printf("{\"accent_hex\":\"%s\",\"complement_hex\":\"%s\",\"on_accent_hex\":\"%s\",\"gradient\":[\"%s\",\"%s\"],\"fallback\":false,\"note\":\"%s\"}\n",
+           fmthex(bestR,bestG,bestB), fmthex(crgb[1],crgb[2],crgb[3]), fmthex(onR,onG,onB), fmthex(bestR,bestG,bestB), fmthex(onR,onG,onB), mode);
+  }'
+}
 auto_wave_color() {
   if ! command -v convert >/dev/null 2>&1; then echo "0xFFFFFF"; return; fi
   local rgb r g b yiq
@@ -113,12 +218,15 @@ spectro_scroll="scroll" spectro_center=0 spectro_vertical=0
 # place visualizer below cover
 viz_below=0
 abr="320k" sr=48000 crf=18 preset="medium" auto_color=0
+debug_palette=0
+palette_colors="${MKYT_PALETTE_COLORS:-8}"
 
 # --- pre-parse positional + long flags (so getopts won’t choke) ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
     none|waveform|spectrum|bars) viz="$1"; shift ;;
     --auto-color) auto_color=1; shift ;;
+    --debug-palette) debug_palette=1; shift ;;
     --spectro-scroll) spectro_scroll="$2"; shift 2 ;;
     --spectro-center) spectro_center=1; shift ;;
     --spectro-vertical) spectro_vertical=1; shift ;;
@@ -166,6 +274,12 @@ command -v ffprobe >/dev/null || { echo "ffprobe not found (part of ffmpeg)"; ex
 [[ -z "$cover" ]] && cover="$(find_cover)"
 [[ -n "$audio" && -f "$audio" ]] || { echo "No WAV found. Put a .wav here or pass -a"; exit 5; }
 [[ -n "$cover" && -f "$cover" ]] || { echo "No cover image found. Add cover/folder.* or .jpg/.png, or pass -i"; exit 4; }
+
+# Debug: print extracted palette JSON and exit
+if (( debug_palette )); then
+  extract_palette "$cover" "$palette_colors"
+  exit 0
+fi
 
 # --- name & encoder (no-overwrite safe) ---
 audio_base="$(basename "$audio")"; title="${audio_base%.*}"
@@ -256,4 +370,3 @@ ffmpeg -n -loop 1 -i "$cover" -i "$audio" \
   -c:v libx264 -tune stillimage -crf "$crf" -preset "$preset" -pix_fmt yuv420p \
   "${audio_args[@]}" -metadata title="$title" \
   -shortest -movflags +faststart -- "$out"
-
