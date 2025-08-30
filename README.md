@@ -1,4 +1,5 @@
 
+#mkyt
 
 Make a YouTube-ready video from a **WAV + cover image** in the current folder.  
 Default = **no visualizer** (static cover). Opt-in **waveform**, **spectrum** (scrolling), or **bars**.
