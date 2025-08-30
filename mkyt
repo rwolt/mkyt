@@ -3,6 +3,13 @@
 # Defaults: no visualizer; auto-detect WAV & cover; auto-size by cover aspect; never overwrite outputs.
 set -euo pipefail
 
+# Debug logging helper
+dbg() {
+  if [[ -n "${MKYT_DEBUG:-}" && "${MKYT_DEBUG}" != "0" ]]; then
+    echo "[mkyt] $*" >&2
+  fi
+}
+
 usage() {
   cat <<'EOF'
 Usage: mkyt [none|waveform|spectrum|bars] [options]
@@ -29,7 +36,8 @@ Options (all optional):
   -s <sr>          Audio sample rate (default: 48000)
   -Q <crf>         H.264 CRF (lower=better; default: 18)
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
-  --auto-color     (waveform only) Auto-pick high-contrast color (needs ImageMagick)
+  --auto-color[=auto|accent|complement|on|dual]  Auto color (waveform & bars). Default: auto
+  --debug-palette  Print extracted palette JSON and exit
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
@@ -44,6 +52,156 @@ EOF
 }
 
 # ---------- helpers ----------
+hex_to_ffmpeg() {
+  # Convert hex to ffmpeg 0xRRGGBB
+  local h="${1#\#}"
+  h=$(echo "$h" | tr '[:lower:]' '[:upper:]')
+  printf '0x%s\n' "$h"
+}
+
+hex_to_unit_rgb() {
+  # Convert #RRGGBB to three 0..1 floats: R G B
+  local h="${1#\#}"
+  local r g b
+  r=$((16#${h:0:2}))
+  g=$((16#${h:2:2}))
+  b=$((16#${h:4:2}))
+  awk -v r="$r" -v g="$g" -v b="$b" 'BEGIN{ printf "%.6f %.6f %.6f\n", r/255.0, g/255.0, b/255.0 }'
+}
+
+is_hex_color() {
+  # Returns 0 if arg looks like #RRGGBB or RRGGBB
+  local x="$1"
+  [[ "$x" =~ ^#?[0-9A-Fa-f]{6}$ ]]
+}
+
+# Extract a #RRGGBB from a tiny JSON blob by key
+json_get_hex() {
+  local key="$1" js="$2" out
+  out=$(printf '%s' "$js" | sed -E -n "s/.*\"${key}\":\"(#?[0-9A-Fa-f]{6})\".*/\\1/p")
+  if [[ -z "$out" ]]; then
+    out=$(printf '%s' "$js" | awk -v k="$key" 'match($0, ("\\\""k"\\\":\\\"#?[0-9A-Fa-f]{6}\\\"")){ s=substr($0,RSTART,RLENGTH); sub(/.*:\"/,"",s); sub(/\"$/,"",s); print s }')
+  fi
+  printf '%s\n' "$out"
+}
+
+make_gradient_lut() {
+  # Print a 256-entry LUT (one channel) blending accent -> on_accent
+  # Usage: make_gradient_lut "#RRGGBB" "#RRGGBB" [r|g|b]
+  local a="${1#\#}" b="${2#\#}" channel="${3:-r}" s e
+  a=$(echo "$a" | tr '[:lower:]' '[:upper:]')
+  b=$(echo "$b" | tr '[:lower:]' '[:upper:]')
+  local ar ag ab br bg bb
+  ar=$((16#${a:0:2})); ag=$((16#${a:2:2})); ab=$((16#${a:4:2}))
+  br=$((16#${b:0:2})); bg=$((16#${b:2:2})); bb=$((16#${b:4:2}))
+  case "$channel" in
+    r) s=$ar; e=$br ;;
+    g) s=$ag; e=$bg ;;
+    b) s=$ab; e=$bb ;;
+    *) echo "Unknown channel '$channel' (use r|g|b)" >&2; return 2 ;;
+  esac
+  awk -v s="$s" -v e="$e" 'BEGIN{ for(i=0;i<256;i++){ v=s + (e-s)*i/255.0; printf("%d\n", (v<0?0:(v>255?255:int(v+0.5)))) } }'
+}
+
+extract_palette() {
+  # Robust palette extractor modeled after Android Monet
+  # Usage: extract_palette <cover_path> [N]
+  # Prints JSON: {accent_hex, complement_hex, on_accent_hex, gradient:[accent,on_accent], fallback, fallback_reason}
+  local cover_path="$1" N="${2:-8}"
+  if ! command -v convert >/dev/null 2>&1; then
+    printf '{"accent_hex":"#FFFFFF","complement_hex":"#000000","on_accent_hex":"#000000","gradient":["#FFFFFF","#000000"],"fallback":true,"fallback_reason":"no_imagemagick"}\n'
+    return 0
+  fi
+  local hist pairs imcmd
+  imcmd="convert"
+  if command -v magick >/dev/null 2>&1; then imcmd="magick"; fi
+  # Force sRGB, disable alpha and dithering to get stable buckets
+  hist=$($imcmd "$cover_path" -colorspace sRGB -alpha off -resize 256x256\! +dither -colors "$N" -format %c histogram:info:- 2>/dev/null || true)
+  # BSD sed compatibility: avoid \+; use [0-9][0-9]*
+  pairs=$(echo "$hist" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\):.*#\([0-9A-Fa-f]\{6\}\).*/\1 \2/p')
+  if [[ -z "$pairs" ]]; then
+    printf '{"accent_hex":"#FFFFFF","complement_hex":"#000000","on_accent_hex":"#000000","gradient":["#FFFFFF","#000000"],"fallback":true,"fallback_reason":"no_histogram"}\n'
+    return 0
+  fi
+  echo "$pairs" | awk '
+  function hexval(c,   hex) { hex="0123456789ABCDEF"; c=toupper(c); return index(hex,c)-1; }
+  function hex2int(h,   i,v) { v=0; for(i=1;i<=length(h);i++){ v = v*16 + hexval(substr(h,i,1)); } return v; }
+  function hex2rgb(h,   r,g,b) { r = hex2int(substr(h,1,2)); g = hex2int(substr(h,3,2)); b = hex2int(substr(h,5,2)); return r "," g "," b; }
+  function rgb2hsl(r,g,b,   rf,gf,bf,max,min,delta,h,s,l) {
+    rf=r/255.0; gf=g/255.0; bf=b/255.0;
+    max=rf; if(gf>max)max=gf; if(bf>max)max=bf;
+    min=rf; if(gf<min)min=gf; if(bf<min)min=bf;
+    l=(max+min)/2.0;
+    if(max==min){ h=0; s=0; }
+    else{
+      delta=max-min;
+      s = (l>0.5) ? delta/(2.0-max-min) : delta/(max+min);
+      if(max==rf){ h=(gf-bf)/delta + (gf<bf?6:0); }
+      else if(max==gf){ h=(bf-rf)/delta + 2; }
+      else{ h=(rf-gf)/delta + 4; }
+      h*=60.0;
+    }
+    return h "," s "," l;
+  }
+  function hue2rgb(p,q,t){ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6.0)return p+(q-p)*6*t; if(t<1/2.0)return q; if(t<2/3.0)return p+(q-p)*(2/3.0-t)*6; return p; }
+  function hsl2rgb(h,s,l,   r,g,b,q,p,hr) {
+    if(s==0){ r=g=b=l; }
+    else{ q = (l<0.5)? l*(1+s) : l+s-l*s; p = 2*l-q; hr=h/360.0; r=hue2rgb(p,q,hr+1/3.0); g=hue2rgb(p,q,hr); b=hue2rgb(p,q,hr-1/3.0); }
+    return int(r*255+0.5) "," int(g*255+0.5) "," int(b*255+0.5);
+  }
+  function fmthex(r,g,b){ return sprintf("#%02X%02X%02X", r,g,b); }
+  function lin(c,   t){ c/=255.0; if(c<=0.04045) return c/12.92; t=(c+0.055)/1.055; return exp(2.4*log(t)); }
+  function rel_luma(r,g,b,   R,G,B){ R=lin(r); G=lin(g); B=lin(b); return 0.2126*R+0.7152*G+0.0722*B; }
+  BEGIN{ FS=" "; bestStrict=-1; bestRelax=-1; bestAny=-1; }
+  NF==2{
+    cnt=$1; hex=toupper($2);
+    split(hex2rgb(hex), rgb, ","); r=rgb[1]+0; g=rgb[2]+0; b=rgb[3]+0;
+    split(rgb2hsl(r,g,b), hsl, ","); h=hsl[1]+0; s=hsl[2]+0; l=hsl[3]+0;
+    mid = (l>=0.3 && l<=0.7) ? 1.0 : 0.5;
+    s_pow = (s>0? exp(1.5*log(s)) : 0);
+    base = cnt * s_pow * (0.5 + 0.5*mid);
+
+    if(s>=0.25 && l>=0.15 && l<=0.85){ if(base>bestStrict){ bestStrict=base; sR=r; sG=g; sB=b; sH=h; sS=s; sL=l; } }
+    if(s>=0.18 && l>=0.12 && l<=0.88){ if(base>bestRelax){ bestRelax=base; rR=r; rG=g; rB=b; rH=h; rS=s; rL=l; } }
+    if(s>0.03){ if(base>bestAny){ bestAny=base; aR=r; aG=g; aB=b; aH=h; aS=s; aL=l; } }
+  }
+  END{
+    mode="";
+    if(bestStrict>0){ bestR=sR; bestG=sG; bestB=sB; bestH=sH; bestS=sS; bestL=sL; mode="strict"; }
+    else if(bestRelax>0){ bestR=rR; bestG=rG; bestB=rB; bestH=rH; bestS=rS; bestL=rL; mode="relaxed"; }
+    else if(bestAny>0){ bestR=aR; bestG=aG; bestB=aB; bestH=aH; bestS=aS; bestL=aL; mode="best_available"; }
+    else { printf("{\"accent_hex\":\"#FFFFFF\",\"complement_hex\":\"#000000\",\"on_accent_hex\":\"#000000\",\"gradient\":[\"#FFFFFF\",\"#000000\"],\"fallback\":true,\"fallback_reason\":\"no_candidates\"}\n"); exit; }
+
+    y = rel_luma(bestR,bestG,bestB);
+    onR = (y>0.5)? 0 : 255; onG = onR; onB = onR;
+    compH = bestH + 180.0; if(compH>=360) compH-=360;
+    compL = (bestL<0.4)?0.4:((bestL>0.7)?0.7:bestL);
+    split(hsl2rgb(compH, bestS, compL), crgb, ",");
+    if(length(mode)==0) mode="strict";
+    printf("{\"accent_hex\":\"%s\",\"complement_hex\":\"%s\",\"on_accent_hex\":\"%s\",\"gradient\":[\"%s\",\"%s\"],\"fallback\":false,\"note\":\"%s\"}\n",
+           fmthex(bestR,bestG,bestB), fmthex(crgb[1],crgb[2],crgb[3]), fmthex(onR,onG,onB), fmthex(bestR,bestG,bestB), fmthex(onR,onG,onB), mode);
+  }'
+}
+
+# Load palette once and export variables for reuse
+load_palette() {
+  if [[ -n "${ACCENT_HEX:-}" && -n "${COMPLEMENT_HEX:-}" && -n "${ON_ACCENT_HEX:-}" ]]; then
+    return 0
+  fi
+  local js
+  js=$(extract_palette "$cover" "$palette_colors")
+  dbg "extract_palette JSON: $js"
+  ACCENT_HEX=$(json_get_hex accent_hex "$js")
+  COMPLEMENT_HEX=$(json_get_hex complement_hex "$js")
+  ON_ACCENT_HEX=$(json_get_hex on_accent_hex "$js")
+  # Validate; fallback to sensible defaults if parsing failed
+  local acc_ok=1 comp_ok=1 on_ok=1
+  if ! is_hex_color "$ACCENT_HEX"; then acc_ok=0; ACCENT_HEX="#FFFFFF"; fi
+  if ! is_hex_color "$COMPLEMENT_HEX"; then comp_ok=0; COMPLEMENT_HEX="#000000"; fi
+  if ! is_hex_color "$ON_ACCENT_HEX"; then on_ok=0; ON_ACCENT_HEX="#000000"; fi
+  dbg "palette parsed ACCENT=${ACCENT_HEX} (ok=${acc_ok}) COMPLEMENT=${COMPLEMENT_HEX} (ok=${comp_ok}) ON=${ON_ACCENT_HEX} (ok=${on_ok})"
+  export ACCENT_HEX COMPLEMENT_HEX ON_ACCENT_HEX
+}
 auto_wave_color() {
   if ! command -v convert >/dev/null 2>&1; then echo "0xFFFFFF"; return; fi
   local rgb r g b yiq
@@ -113,12 +271,25 @@ spectro_scroll="scroll" spectro_center=0 spectro_vertical=0
 # place visualizer below cover
 viz_below=0
 abr="320k" sr=48000 crf=18 preset="medium" auto_color=0
+debug_palette=0
+palette_colors="${MKYT_PALETTE_COLORS:-8}"
+auto_color_mode="auto"
 
 # --- pre-parse positional + long flags (so getopts won’t choke) ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
     none|waveform|spectrum|bars) viz="$1"; shift ;;
-    --auto-color) auto_color=1; shift ;;
+    --auto-color|--auto-color=*)
+      auto_color=1
+      if [[ "$1" == --auto-color ]]; then
+        auto_color_mode="auto"
+        shift
+      else
+        auto_color_mode="${1#--auto-color=}"
+        shift
+      fi
+      ;;
+    --debug-palette) debug_palette=1; shift ;;
     --spectro-scroll) spectro_scroll="$2"; shift 2 ;;
     --spectro-center) spectro_center=1; shift ;;
     --spectro-vertical) spectro_vertical=1; shift ;;
@@ -166,6 +337,12 @@ command -v ffprobe >/dev/null || { echo "ffprobe not found (part of ffmpeg)"; ex
 [[ -z "$cover" ]] && cover="$(find_cover)"
 [[ -n "$audio" && -f "$audio" ]] || { echo "No WAV found. Put a .wav here or pass -a"; exit 5; }
 [[ -n "$cover" && -f "$cover" ]] || { echo "No cover image found. Add cover/folder.* or .jpg/.png, or pass -i"; exit 4; }
+
+# Debug: print extracted palette JSON and exit
+if (( debug_palette )); then
+  extract_palette "$cover" "$palette_colors"
+  exit 0
+fi
 
 # --- name & encoder (no-overwrite safe) ---
 audio_base="$(basename "$audio")"; title="${audio_base%.*}"
@@ -219,9 +396,72 @@ fi
 
 # Visualizer filter
 vizf=""
+
+# helper to check if a solid black strip is active
+black_strip_active() {
+  if (( black_flag )); then return 0; fi
+  local rc rc_l
+  rc="$rect_color"; rc_l=$(echo "$rc" | tr '[:upper:]' '[:lower:]')
+  if (( rect == vizh )) && [[ "$rc_l" == "black@1" ]]; then return 0; fi
+  dbg "black strip not active (rect=$rect rect_color=$rc_l vizh=$vizh)"
+  return 1
+}
+
+# Resolve selected hex from palette and mode
+resolve_auto_hex() {
+  load_palette
+  local mode="$1"
+  case "$mode" in
+    accent) echo "$ACCENT_HEX" ;;
+    complement) echo "$COMPLEMENT_HEX" ;;
+    on) echo "$ON_ACCENT_HEX" ;;
+    auto|*)
+      if black_strip_active; then dbg "auto-color: black strip → accent"; echo "$ACCENT_HEX"; else dbg "auto-color: over artwork → complement"; echo "$COMPLEMENT_HEX"; fi ;;
+  esac
+}
+
+# Resolve a primary/secondary hex pair for dual mode
+resolve_dual_hexes() {
+  load_palette
+  local primary secondary
+  if black_strip_active; then
+    primary="$ACCENT_HEX"; secondary="$COMPLEMENT_HEX"; dbg "dual-color: black strip → primary=accent secondary=complement";
+  else
+    primary="$COMPLEMENT_HEX"; secondary="$ACCENT_HEX"; dbg "dual-color: over artwork → primary=complement secondary=accent";
+  fi
+  printf '%s %s\n' "$primary" "$secondary"
+}
 if [[ "$viz" == "waveform" ]]; then
-  wave_color="0xFFFFFF"; (( auto_color )) && wave_color="$(auto_wave_color)"
-  vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color},format=rgba[viz];"
+  wave_color="0xFFFFFF"
+  if (( auto_color )); then
+    if [[ "$auto_color_mode" == "dual" ]]; then
+      read -r pri_hex sec_hex <<<"$(resolve_dual_hexes)"
+      if is_hex_color "$pri_hex" && is_hex_color "$sec_hex"; then
+        wave_color_pri="$(hex_to_ffmpeg "$pri_hex")"
+        wave_color_sec="$(hex_to_ffmpeg "$sec_hex")"
+      else
+        # Fallback: both channels same legacy color
+        wave_color_pri="$(auto_wave_color)"; wave_color_sec="$wave_color_pri"
+      fi
+      dbg "waveform: mode=dual primary=$pri_hex secondary=$sec_hex colors=${wave_color_pri}|${wave_color_sec}"
+    else
+      wave_hex=$(resolve_auto_hex "$auto_color_mode")
+      if is_hex_color "$wave_hex"; then
+        wave_color="$(hex_to_ffmpeg "$wave_hex")"
+      else
+        # Fallback to legacy detector if palette parse fails
+        wave_color="$(auto_wave_color)"
+      fi
+      dbg "waveform: mode=$auto_color_mode wave_hex=$wave_hex wave_color=$wave_color"
+    fi
+  fi
+  # Duplicate color for both channels to avoid default white on one channel
+  if (( auto_color )) && [[ "$auto_color_mode" == "dual" ]]; then
+    vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color_pri}|${wave_color_sec},format=rgba[viz];"
+  else
+    vizf="[1:a]showwaves=s=${width}x${vizh}:mode=${wf_mode}:rate=${fps}:colors=${wave_color}|${wave_color},format=rgba[viz];"
+  fi
+  dbg "waveform vizf: $vizf"
 elif [[ "$viz" == "spectrum" ]]; then
   # spectrum visualizer
   viz_vertical=""
@@ -232,8 +472,33 @@ elif [[ "$viz" == "spectrum" ]]; then
     vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette}${viz_vertical},format=rgba[viz];"
   fi
 elif [[ "$viz" == "bars" ]]; then
-  # dance-style bars
-  vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7,format=rgba[viz];"
+  if (( auto_color )); then
+    if [[ "$auto_color_mode" == "dual" ]]; then
+      read -r pri_hex sec_hex <<<"$(resolve_dual_hexes)"
+      if is_hex_color "$pri_hex" && is_hex_color "$sec_hex"; then
+        read -r pr pg pb <<<"$(hex_to_unit_rgb "$pri_hex")"
+        read -r sr sg sb <<<"$(hex_to_unit_rgb "$sec_hex")"
+        vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:win_size=4096:overlap=0.75,format=rgba[b0];[b0]hue=s=0[bgray];[bgray]split=2[g0][g1];[g0]colorchannelmixer=rr=${pr}:gg=${pg}:bb=${pb}[c0];[g1]colorchannelmixer=rr=${sr}:gg=${sg}:bb=${sb}[c1];[c0][c1]blend=all_mode=screen:all_opacity=0.45,format=rgba[viz];"
+        dbg "bars: mode=dual primary=$pri_hex secondary=$sec_hex unitsP=${pr},${pg},${pb} unitsS=${sr},${sg},${sb}"
+      else
+        vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7,format=rgba[viz];"
+      fi
+    else
+      bar_hex=$(resolve_auto_hex "$auto_color_mode")
+      if is_hex_color "$bar_hex"; then
+        read -r rr gg bb <<<"$(hex_to_unit_rgb "$bar_hex")"
+        vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:win_size=4096:overlap=0.75,format=rgba[b0];[b0]hue=s=0[bgray];[bgray]colorchannelmixer=rr=${rr}:gg=${gg}:bb=${bb},format=rgba[viz];"
+        dbg "bars: mode=$auto_color_mode bar_hex=$bar_hex unit=${rr},${gg},${bb}"
+      else
+        # back-compat default colored bars
+        vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7,format=rgba[viz];"
+      fi
+    fi
+    dbg "bars vizf: $vizf"
+  else
+    # back-compat default colored bars
+    vizf="[1:a]showfreqs=s=${width}x${vizh}:mode=bar:ascale=log:fscale=log:averaging=0.7,format=rgba[viz];"
+  fi
 fi
 
 # Compose
@@ -256,4 +521,3 @@ ffmpeg -n -loop 1 -i "$cover" -i "$audio" \
   -c:v libx264 -tune stillimage -crf "$crf" -preset "$preset" -pix_fmt yuv420p \
   "${audio_args[@]}" -metadata title="$title" \
   -shortest -movflags +faststart -- "$out"
-
