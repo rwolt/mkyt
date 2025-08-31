@@ -38,6 +38,7 @@ Options (all optional):
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
   --auto-color[=auto|accent|complement|on|dual]  Auto color (waveform & bars). Default: auto
   --debug-palette  Print extracted palette JSON and exit
+  --spectro-fullscreen  Spectrum full screen (no cover); default size 1920x1080
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
@@ -274,6 +275,7 @@ abr="320k" sr=48000 crf=18 preset="medium" auto_color=0
 debug_palette=0
 palette_colors="${MKYT_PALETTE_COLORS:-8}"
 auto_color_mode="auto"
+spectro_fullscreen=0
 
 # --- pre-parse positional + long flags (so getopts won’t choke) ---
 while [[ $# -gt 0 ]]; do
@@ -289,7 +291,8 @@ while [[ $# -gt 0 ]]; do
         shift
       fi
       ;;
-    --debug-palette) debug_palette=1; shift ;;
+  --debug-palette) debug_palette=1; shift ;;
+  --spectro-fullscreen) spectro_fullscreen=1; shift ;;
     --spectro-scroll) spectro_scroll="$2"; shift 2 ;;
     --spectro-center) spectro_center=1; shift ;;
     --spectro-vertical) spectro_vertical=1; shift ;;
@@ -336,7 +339,9 @@ command -v ffprobe >/dev/null || { echo "ffprobe not found (part of ffmpeg)"; ex
 [[ -z "$audio" ]] && audio="$(find_audio)"
 [[ -z "$cover" ]] && cover="$(find_cover)"
 [[ -n "$audio" && -f "$audio" ]] || { echo "No WAV found. Put a .wav here or pass -a"; exit 5; }
-[[ -n "$cover" && -f "$cover" ]] || { echo "No cover image found. Add cover/folder.* or .jpg/.png, or pass -i"; exit 4; }
+if ! { [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]] ; }; then
+  [[ -n "$cover" && -f "$cover" ]] || { echo "No cover image found. Add cover/folder.* or .jpg/.png, or pass -i"; exit 4; }
+fi
 
 # Debug: print extracted palette JSON and exit
 if (( debug_palette )); then
@@ -360,14 +365,16 @@ else
 fi
 
 # --- cover aspect → output size ---
-iw_ih=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$cover" || echo "")
-if [[ -n "$iw_ih" ]]; then
-  IFS="x" read -r iw ih <<<"$iw_ih"
-  if [[ $user_set_dims -eq 0 && ${iw:-0} -gt 0 && ${ih:-0} -gt 0 ]]; then
-    ar=$(awk "BEGIN { printf \"%.3f\", $iw/$ih }")
-    if   awk "BEGIN {exit !($ar>1.74 && $ar<1.82)}"; then width=1920; height=1080     # 16:9
-    elif awk "BEGIN {exit !($ar>1.32 && $ar<1.35)}"; then width=1440; height=1080     # 4:3
-    else width=1920; height=1080; fi
+if ! { [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]]; }; then
+  iw_ih=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$cover" || echo "")
+  if [[ -n "$iw_ih" ]]; then
+    IFS="x" read -r iw ih <<<"$iw_ih"
+    if [[ $user_set_dims -eq 0 && ${iw:-0} -gt 0 && ${ih:-0} -gt 0 ]]; then
+      ar=$(awk "BEGIN { printf \"%.3f\", $iw/$ih }")
+      if   awk "BEGIN {exit !($ar>1.74 && $ar<1.82)}"; then width=1920; height=1080     # 16:9
+      elif awk "BEGIN {exit !($ar>1.32 && $ar<1.35)}"; then width=1440; height=1080     # 4:3
+      else width=1920; height=1080; fi
+    fi
   fi
 fi
 : "${width:=1920}"; : "${height:=1080}"
@@ -467,9 +474,9 @@ elif [[ "$viz" == "spectrum" ]]; then
   viz_vertical=""
   (( spectro_vertical )) && viz_vertical=",transpose=2"
   if (( spectro_center )); then
-    vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical}[viz];"
+    vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   else
-    vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette}${viz_vertical},format=rgba[viz];"
+    vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette}${viz_vertical},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   fi
 elif [[ "$viz" == "bars" ]]; then
   if (( auto_color )); then
@@ -501,23 +508,32 @@ elif [[ "$viz" == "bars" ]]; then
   fi
 fi
 
-# Compose
-if [[ -n "$vizf" ]]; then
-  if (( rect > 0 )); then
-    barf="[bg]drawbox=x=0:y=${bar_y}:w=iw:h=${rect}:color=${rect_color}:t=fill[bg2];"
-    overlayf="[bg2][viz]overlay=0:${overlay_y}[v]"
-    filter_complex="${vizf}${bgf}${barf}${overlayf}"
-  else
-    overlayf="[bg][viz]overlay=0:${overlay_y}[v]"
-    filter_complex="${vizf}${bgf}${overlayf}"
-  fi
+# Compose / inputs
+input_args=(-loop 1 -i "$cover" -i "$audio")
+vmap="[v]"; amap="1:a"
+if [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]]; then
+  # full-screen spectrum: no background, only audio input
+  filter_complex="$vizf"
+  input_args=(-i "$audio")
+  vmap="[v]"; amap="0:a"
 else
-  filter_complex="${bgf}[bg]copy[v]"
+  if [[ -n "$vizf" ]]; then
+    if (( rect > 0 )); then
+      barf="[bg]drawbox=x=0:y=${bar_y}:w=iw:h=${rect}:color=${rect_color}:t=fill[bg2];"
+      overlayf="[bg2][viz]overlay=0:${overlay_y}[v]"
+      filter_complex="${vizf}${bgf}${barf}${overlayf}"
+    else
+      overlayf="[bg][viz]overlay=0:${overlay_y}[v]"
+      filter_complex="${vizf}${bgf}${overlayf}"
+    fi
+  else
+    filter_complex="${bgf}[bg]copy[v]"
+  fi
 fi
 
 # Run (never overwrite: -n)
-ffmpeg -n -loop 1 -i "$cover" -i "$audio" \
-  -filter_complex "$filter_complex" -map "[v]" -map 1:a \
+ffmpeg -n "${input_args[@]}" \
+  -filter_complex "$filter_complex" -map "$vmap" -map "$amap" \
   -c:v libx264 -tune stillimage -crf "$crf" -preset "$preset" -pix_fmt yuv420p \
   "${audio_args[@]}" -metadata title="$title" \
   -shortest -movflags +faststart -- "$out"
