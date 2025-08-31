@@ -1,5 +1,5 @@
 
-#mkyt
+# mkyt
 
 Make a YouTube-ready video from a **WAV + cover image** in the current folder.  
 Default = **no visualizer** (static cover). Opt-in **waveform**, **spectrum** (scrolling), or **bars**.
@@ -131,6 +131,9 @@ Options (all optional):
   -P <preset>      x264 preset (ultrafast..veryslow; default: medium)
   --auto-color[=auto|accent|complement|on|dual]  Palette auto-color (waveform & bars). Default: auto
   --debug-palette  Print extracted palette JSON and exit
+  --spectro-fullscreen  Spectrum full screen (no cover); default 1920x1080
+  --viz-percent <1-100>  Visualizer height as % of frame (overrides -H)
+  --spectro-vzoom <1-100>  Spectrum vertical zoom: keep lowest N% of band
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
@@ -186,6 +189,15 @@ mkyt spectrum -K rainbow -H 280 -M 16 -B
 mkyt spectrum -A top -B
 # stack spectrum below the cover image
 mkyt spectrum --viz-below -B
+
+# full-screen spectrogram (no cover), default 1080p
+mkyt spectrum --spectro-fullscreen
+
+# size the viz as a percent of frame height (overrides -H)
+mkyt spectrum --viz-below --viz-percent 30 -B
+
+# zoom into lower frequencies (keep lowest 50% of band, then scale back)
+mkyt spectrum --viz-below --viz-percent 35 --spectro-vzoom 50 -B
 ```
 ### 4) Bar analyzer (“dance” look)
 ```bash
