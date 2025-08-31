@@ -473,10 +473,12 @@ elif [[ "$viz" == "spectrum" ]]; then
   # spectrum visualizer
   viz_vertical=""
   (( spectro_vertical )) && viz_vertical=",transpose=2"
+  # pick audio input index (fullscreen → only audio as input 0)
+  if (( spectro_fullscreen )); then a_in="[0:a]"; spec_size="${width}x${height}"; else a_in="[1:a]"; spec_size="${width}x${vizh}"; fi
   if (( spectro_center )); then
-    vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   else
-    vizf="[1:a]showspectrum=s=${width}x${vizh}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette}${viz_vertical},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette}${viz_vertical},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   fi
 elif [[ "$viz" == "bars" ]]; then
   if (( auto_color )); then
