@@ -32,6 +32,8 @@ Options (all optional):
   -m <mode>        Waveform mode: line|point|p2p (default: line)
   -f <fps>         Viz FPS (default: 25)
   -K <palette>     Spectrum palette (e.g. intensity|rainbow) (default: intensity)
+  --viz-percent <1-100>  Visualizer height as % of frame (overrides -H)
+  --spectro-vzoom <1-100> Spectrum freq zoom: keep lowest N% of band (e.g., 50 keeps ~0..12k)
   -b <abr>         Audio bitrate for native AAC (default: 320k)
   -s <sr>          Audio sample rate (default: 48000)
   -Q <crf>         H.264 CRF (lower=better; default: 18)
@@ -276,6 +278,8 @@ debug_palette=0
 palette_colors="${MKYT_PALETTE_COLORS:-8}"
 auto_color_mode="auto"
 spectro_fullscreen=0
+viz_percent=0
+spectro_vzoom=0
 
 # --- pre-parse positional + long flags (so getopts won’t choke) ---
 while [[ $# -gt 0 ]]; do
@@ -296,6 +300,8 @@ while [[ $# -gt 0 ]]; do
     --spectro-scroll) spectro_scroll="$2"; shift 2 ;;
     --spectro-center) spectro_center=1; shift ;;
     --spectro-vertical) spectro_vertical=1; shift ;;
+    --viz-percent) viz_percent="$2"; shift 2 ;;
+    --spectro-vzoom) spectro_vzoom="$2"; shift 2 ;;
     --viz-below|--spectro-below) viz_below=1; shift ;;
     --) shift; break ;;                   # end of options
     -*) break ;;                          # let getopts handle
@@ -378,6 +384,12 @@ if ! { [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]]; }; then
   fi
 fi
 : "${width:=1920}"; : "${height:=1080}"
+
+# Apply percentage-based viz height if requested
+if [[ ${viz_percent:-0} -gt 0 && ${viz_percent:-0} -le 100 ]]; then
+  vizh=$(( (height * viz_percent) / 100 ))
+  (( vizh < 1 )) && vizh=1
+fi
 
 if (( viz_below )); then
   base_h=$height
@@ -474,11 +486,16 @@ elif [[ "$viz" == "spectrum" ]]; then
   viz_vertical=""
   (( spectro_vertical )) && viz_vertical=",transpose=2"
   # pick audio input index (fullscreen → only audio as input 0)
-  if (( spectro_fullscreen )); then a_in="[0:a]"; spec_size="${width}x${height}"; else a_in="[1:a]"; spec_size="${width}x${vizh}"; fi
+  if (( spectro_fullscreen )); then a_in="[0:a]"; spec_size="${width}x${height}"; spec_h="$height"; else a_in="[1:a]"; spec_size="${width}x${vizh}"; spec_h="$vizh"; fi
+  # optional vertical zoom: keep lowest N% of band
+  zoom_post=""; if [[ ${spectro_vzoom:-0} -gt 0 && ${spectro_vzoom:-0} -le 100 ]]; then
+    keep_frac=$(awk -v p="$spectro_vzoom" 'BEGIN{ printf "%.4f", p/100.0 }')
+    zoom_post="[s]crop=iw:ih*${keep_frac}:0:ih-ih*${keep_frac},scale=iw:${spec_h}[s];"
+  fi
   if (( spectro_center )); then
-    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];${zoom_post}[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   else
-    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette}${viz_vertical},fps=${fps},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];${zoom_post}[s]copy${viz_vertical},fps=${fps},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   fi
 elif [[ "$viz" == "bars" ]]; then
   if (( auto_color )); then
