@@ -486,7 +486,17 @@ elif [[ "$viz" == "spectrum" ]]; then
   viz_vertical=""
   (( spectro_vertical )) && viz_vertical=",transpose=2"
   # pick audio input index (fullscreen → only audio as input 0)
-  if (( spectro_fullscreen )); then a_in="[0:a]"; spec_size="${width}x${height}"; spec_h="$height"; else a_in="[1:a]"; spec_size="${width}x${vizh}"; spec_h="$vizh"; fi
+  if (( spectro_fullscreen )); then
+    a_in="[0:a]"; spec_w="$width"; spec_h="$height"
+  else
+    a_in="[1:a]"; spec_w="$width"; spec_h="$vizh"
+  fi
+  # If vertical layout, render pre-rotated dimensions so after transpose it fits width x spec_h
+  if (( spectro_vertical )); then
+    spec_size="${spec_h}x${spec_w}"
+  else
+    spec_size="${spec_w}x${spec_h}"
+  fi
   # optional vertical zoom: keep lowest N% of band
   zoom_post=""; if [[ ${spectro_vzoom:-0} -gt 0 && ${spectro_vzoom:-0} -le 100 ]]; then
     keep_frac=$(awk -v p="$spectro_vzoom" 'BEGIN{ printf "%.4f", p/100.0 }')
