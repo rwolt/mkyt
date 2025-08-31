@@ -486,11 +486,25 @@ elif [[ "$viz" == "spectrum" ]]; then
   viz_vertical=""
   (( spectro_vertical )) && viz_vertical=",transpose=2"
   # pick audio input index (fullscreen → only audio as input 0)
-  if (( spectro_fullscreen )); then a_in="[0:a]"; spec_size="${width}x${height}"; spec_h="$height"; else a_in="[1:a]"; spec_size="${width}x${vizh}"; spec_h="$vizh"; fi
-  # optional vertical zoom: keep lowest N% of band
+  if (( spectro_fullscreen )); then
+    a_in="[0:a]"; spec_w="$width"; spec_h="$height"
+  else
+    a_in="[1:a]"; spec_w="$width"; spec_h="$vizh"
+  fi
+  # If vertical layout, render pre-rotated dimensions so after transpose it fits width x spec_h
+  if (( spectro_vertical )); then
+    spec_size="${spec_h}x${spec_w}"
+  else
+    spec_size="${spec_w}x${spec_h}"
+  fi
+  # optional vertical zoom: keep lowest N% of band, then scale back to fill target
   zoom_post=""; if [[ ${spectro_vzoom:-0} -gt 0 && ${spectro_vzoom:-0} -le 100 ]]; then
     keep_frac=$(awk -v p="$spectro_vzoom" 'BEGIN{ printf "%.4f", p/100.0 }')
-    zoom_post="[s]crop=iw:ih*${keep_frac}:0:ih-ih*${keep_frac},scale=iw:${spec_h}[s];"
+    # For vertical layout, pre-rotated frame has height=spec_w, width=spec_h; to fill width after transpose,
+    # we must scale pre-rotated height back to spec_w. For non-vertical, scale back to spec_h.
+    scale_target_h=$spec_h
+    if (( spectro_vertical )); then scale_target_h=$spec_w; fi
+    zoom_post="[s]crop=iw:ih*${keep_frac}:0:ih-ih*${keep_frac},scale=iw:${scale_target_h}[s];"
   fi
   if (( spectro_center )); then
     vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];${zoom_post}[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
