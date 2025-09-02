@@ -5,7 +5,7 @@ Make a YouTube-ready video from a **WAV + cover image** in the current folder.
 Default = **no visualizer** (static cover). Opt-in **waveform**, **spectrum** (scrolling), or **bars**.
 
 - 🖼️ Auto-finds cover (`cover.*` / `folder.*`, else newest `*.jpg|*.jpeg|*.png`)
-- 🎵 Auto-finds audio (`*.wav`, picks newest if multiple)
+- 🎵 Auto-finds audio (`*.wav|*.mp3`, picks newest if multiple)
 - 🧭 Auto output size from **cover aspect**
   - 16:9 → `1920×1080`
   - 4:3 → `1440×1080` (no cropping)
