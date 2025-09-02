@@ -112,7 +112,7 @@ Positional (optional):
 
 Options (all optional):
   -i <cover>       Cover image (jpg/jpeg/png)
-  -a <audio>       Audio file (wav)
+  -a <audio>       Audio file (wav|mp3)
   -o <output>      Output MP4 (default: <audio_basename>.mp4)
   -w <width>       Output width  (auto by cover AR if not set)
   -h <height>      Output height (auto by cover AR if not set)
@@ -217,10 +217,19 @@ mkyt bars --auto-color=dual      # complement+accent over artwork (accent+comple
 ```
 ### 5) Placement, margins, and contrast bar
 ```bash
-# top placement with 16 px margin, translucent contrast bar
-mkyt waveform -A top -M 16 -R 200 -C black@0.5
+# Over the cover (default layout):
+# -A chooses the edge to anchor the viz strip; -M adds margin in pixels from that edge
+# Example: top alignment with 250 px margin (gap from top) and a translucent strip behind
+mkyt waveform -A top -M 250 -R 200 -C black@0.5
 
-# centered visualizer (margin ignored in center mode)
+# Bottom alignment with 120 px margin
+mkyt spectrum -A bottom -M 120 -B
+
+# Stacked below the cover (--viz-below):
+# The margin becomes the gap between the cover and the viz strip
+mkyt bars --viz-below -M 160 -B
+
+# Center alignment ignores -M (kept for completeness)
 mkyt spectrum -A center -H 320 -B
 ```
 ### 6) Explicit files (skip auto-detect)
