@@ -19,7 +19,7 @@ Positional (optional):
 
 Options (all optional):
   -i <cover>       Cover image (jpg/jpeg/png)
-  -a <audio>       Audio file (wav)
+  -a <audio>       Audio file (wav|mp3)
   -o <output>      Output MP4 (default: <audio_basename>.mp4)
   -w <width>       Output width  (auto by cover AR if not set)
   -h <height>      Output height (auto by cover AR if not set)
@@ -218,7 +218,7 @@ auto_wave_color() {
 }
 
 find_audio() {
-  shopt -s nullglob nocaseglob; local c=( *.wav ); shopt -u nocaseglob
+  shopt -s nullglob nocaseglob; local c=( *.wav *.mp3 ); shopt -u nocaseglob
   (( ${#c[@]} )) || { echo ""; return; }
   if (( ${#c[@]} == 1 )); then echo "${c[0]}"; return; fi
   local newest="" newest_m=0 mt f
@@ -344,7 +344,7 @@ command -v ffprobe >/dev/null || { echo "ffprobe not found (part of ffmpeg)"; ex
 # --- auto-detect files ---
 [[ -z "$audio" ]] && audio="$(find_audio)"
 [[ -z "$cover" ]] && cover="$(find_cover)"
-[[ -n "$audio" && -f "$audio" ]] || { echo "No WAV found. Put a .wav here or pass -a"; exit 5; }
+[[ -n "$audio" && -f "$audio" ]] || { echo "No audio found. Put a .wav or .mp3 here or pass -a"; exit 5; }
 if ! { [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]] ; }; then
   [[ -n "$cover" && -f "$cover" ]] || { echo "No cover image found. Add cover/folder.* or .jpg/.png, or pass -i"; exit 4; }
 fi
