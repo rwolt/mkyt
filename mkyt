@@ -376,6 +376,9 @@ command -v ffprobe >/dev/null || { echo "ffprobe not found (part of ffmpeg)"; ex
 [[ -z "$audio" ]] && audio="$(find_audio)"
 [[ -z "$cover" ]] && cover="$(find_cover)"
 [[ -n "$audio" && -f "$audio" ]] || { echo "No audio found. Put a .wav or .mp3 here or pass -a"; exit 5; }
+source_sr=$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of default=noprint_wrappers=1:nokey=1 "$audio" | head -n 1)
+[[ "$source_sr" =~ ^[0-9]+$ ]] || { echo "Could not determine audio sample rate"; exit 5; }
+if (( spectro_max_freq > source_sr / 2 )); then echo "Maximum spectrogram frequency must not exceed Nyquist ($((source_sr / 2)) Hz)"; exit 2; fi
 if ! { [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]] ; }; then
   [[ -n "$cover" && -f "$cover" ]] || { echo "No cover image found. Add cover/folder.* or .jpg/.png, or pass -i"; exit 4; }
 fi
@@ -542,7 +545,7 @@ elif [[ "$viz" == "spectrum" ]]; then
   # column advances by (1-overlap)*window_size samples. Solve overlap so the
   # complete time axis represents the requested number of seconds.
   fft_window=$(( render_h * 2 ))
-  spectro_overlap=$(awk -v seconds="$spectro_seconds" -v rate="$sr" -v pixels="$time_pixels" -v win="$fft_window" 'BEGIN {
+  spectro_overlap=$(awk -v seconds="$spectro_seconds" -v rate="$source_sr" -v pixels="$time_pixels" -v win="$fft_window" 'BEGIN {
     ov = 1 - (seconds * rate / pixels) / win;
     if (ov < 0) ov = 0;
     if (ov > 0.9999) ov = 0.9999;
