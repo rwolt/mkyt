@@ -134,6 +134,8 @@ Options (all optional):
   --spectro-fullscreen  Spectrum full screen (no cover); default 1920x1080
   --viz-percent <1-100>  Visualizer height as % of frame (overrides -H)
   --spectro-vzoom <1-100>  Spectrum vertical zoom: keep lowest N% of band
+  --spectro-scale <log|linear>  Frequency-axis scale (default: log)
+  --spectro-legend  Draw frequency and time axes with labels
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
@@ -192,6 +194,12 @@ mkyt spectrum --viz-below -B
 
 # full-screen spectrogram (no cover), default 1080p
 mkyt spectrum --spectro-fullscreen
+
+# Show the frequency/time axes; the frequency labels follow the spectrum orientation
+mkyt spectrum --spectro-fullscreen --spectro-legend
+
+# Switch frequency placement to linear instead of logarithmic
+mkyt spectrum --spectro-fullscreen --spectro-scale linear
 
 # size the viz as a percent of frame height (overrides -H)
 mkyt spectrum --viz-below --viz-percent 30 -B
@@ -262,7 +270,7 @@ mkyt -b 256k -s 48000
 - Cover is scaled to show the entire image and padded to the chosen output size.
 - Visualizers use FFmpeg filters:
     - `showwaves` (waveform; supports custom color, modes line|point|p2p)
-    - `showspectrum` (scrolling spectrogram with slide=scroll, Hann window, overlap 0.8)
+    - `showspectrum` (scrolling spectrogram with configurable logarithmic/linear frequency axis and optional frequency/time legend; slide=scroll, Hann window, overlap 0.8)
     - `showfreqs` (bar analyzer with log frequency scaling)
  
 - Palette extraction (Monet-like): the cover is quantized (ImageMagick), near-neutrals/extremes are filtered out, and colors are scored
