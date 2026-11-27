@@ -527,12 +527,19 @@ elif [[ "$viz" == "spectrum" ]]; then
   else
     a_in="[1:a]"; spec_w="$width"; spec_h="$vizh"
   fi
-  # Reserve black side gutters for independently drawn, readable legends.
+  # Reserve space for a separately generated, transparent legend overlay.
   if (( spectro_legend )); then
     if (( spectro_vertical )); then
       echo "Custom frequency legend currently requires the standard horizontal layout; omit --spectro-vertical." >&2
       exit 2
     fi
+    if [[ "$viz" != "spectrum" || $spectro_fullscreen -ne 1 ]]; then
+      echo "Custom legend overlay is currently supported with --spectro-fullscreen." >&2
+      exit 2
+    fi
+    command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1 || {
+      echo "--spectro-legend requires ImageMagick (brew install imagemagick)." >&2; exit 3;
+    }
     legend_left=100
     legend_w=104
     spec_w=$((spec_w - legend_left - legend_w))
@@ -575,24 +582,11 @@ elif [[ "$viz" == "spectrum" ]]; then
   if [[ ${spectro_vzoom:-0} -gt 0 && ${spectro_vzoom:-0} -le 100 ]]; then
     zoom_post="[s]crop=iw:${spec_h}:0:ih-${spec_h}[s];"
   fi
-  # Draw the frequency scale as a separate, readable overlay. Unlike the old
-  # flip-based workaround, this never mirrors the spectrogram or its text.
+  # The legend itself is rendered to a transparent PNG below; FFmpeg only
+  # composites that image, so no drawtext/freetype filter is required.
   spectro_post="${viz_vertical}"
   if (( spectro_legend )); then
     spectro_post+=",pad=iw+${legend_left}+${legend_w}:ih:${legend_left}:0:black"
-    freq_ticks=(20 50 100 200 500 1000 2000 4000)
-    for hz in "${freq_ticks[@]}"; do
-      if (( hz >= spectro_min_freq && hz <= spectro_max_freq )); then
-        tick_y=$(awk -v f="$hz" -v lo="$spectro_min_freq" -v hi="$spectro_max_freq" -v h="$spec_h" 'BEGIN { if (lo<=0) lo=1; p=log(f/lo)/log(hi/lo); y=(1-p)*(h-1); printf "%d", y }')
-        spectro_post+=",drawbox=x=$((legend_left+spec_w)):y=${tick_y}:w=8:h=2:color=white:t=fill"
-        spectro_post+=",drawtext=text='${hz} Hz':x=$((legend_left+spec_w+13)):y=$((tick_y-10)):fontsize=18:fontcolor=white:box=1:boxcolor=black@0.75:boxborderw=3"
-      fi
-    done
-    spectro_post+=",drawtext=text='LEVEL':x=10:y=10:fontsize=16:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=4"
-    spectro_post+=",drawtext=text='0 dB':x=10:y=34:fontsize=14:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=3"
-    spectro_post+=",drawtext=text='-20':x=10:y=55:fontsize=14:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=3"
-    spectro_post+=",drawtext=text='-40':x=10:y=76:fontsize=14:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=3"
-    spectro_post+=",drawtext=text='-60':x=10:y=97:fontsize=14:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=3"
   fi
   if (( spectro_center )); then
     vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=scroll:legend=disabled:win_func=hann:overlap=${spectro_overlap}:start=${spectro_min_freq}:stop=${spectro_max_freq}:color=${palette},format=rgba[s];${zoom_post}[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical}${spectro_post},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
@@ -633,10 +627,32 @@ fi
 input_args=(-loop 1 -i "$cover" -i "$audio")
 vmap="[v]"; amap="1:a"
 if [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]]; then
-  # full-screen spectrum: no background, only audio input
-  filter_complex="$vizf"
+  # full-screen spectrum: optional legend is a separate transparent PNG input.
   input_args=(-i "$audio")
-  vmap="[v]"; amap="0:a"
+  if (( spectro_legend )); then
+    legend_png=$(mktemp -t mkyt-legend)
+    trap 'rm -f "${legend_png:-}"' EXIT
+    imcmd="convert"
+    command -v magick >/dev/null 2>&1 && imcmd="magick"
+    legend_draw=""
+    freq_ticks=(20 50 100 200 500 1000 2000 4000)
+    for hz in "${freq_ticks[@]}"; do
+      if (( hz >= spectro_min_freq && hz <= spectro_max_freq )); then
+        tick_y=$(awk -v f="$hz" -v lo="$spectro_min_freq" -v hi="$spectro_max_freq" -v h="$height" 'BEGIN { if (lo<=0) lo=1; p=log(f/lo)/log(hi/lo); printf "%d", (1-p)*(h-1) }')
+        legend_draw+=" line $((legend_left+spec_w)),$tick_y $((legend_left+spec_w+8)),$tick_y"
+        legend_draw+=" text $((legend_left+spec_w+14)),$((tick_y+6)) '$hz Hz'"
+      fi
+    done
+    legend_draw+=" text 12,28 'LEVEL' text 12,55 '0 dB' text 12,79 '-20' text 12,103 '-40' text 12,127 '-60'"
+    "$imcmd" -size "${width}x${height}" xc:none -fill white -stroke white -strokewidth 2 -font sans -pointsize 18 -draw "$legend_draw" "PNG:$legend_png"
+    input_args+=(-loop 1 -i "$legend_png")
+    filter_complex="${vizf}[v][1:v]overlay=0:0:shortest=1[vout]"
+    vmap="[vout]"
+  else
+    filter_complex="$vizf"
+    vmap="[v]"
+  fi
+  amap="0:a"
 else
   if [[ -n "$vizf" ]]; then
     if (( rect > 0 )); then

@@ -209,6 +209,7 @@ mkyt spectrum --spectro-fullscreen --spectro-legend
 mkyt spectrum --spectro-fullscreen --spectro-scale linear
 
 # Draw a readable frequency scale on the right without mirroring the image
+# Requires ImageMagick (brew install imagemagick); no FFmpeg drawtext filter needed.
 mkyt spectrum --spectro-fullscreen --spectro-legend
 
 # --spectro-legend-swap remains as a backwards-compatible alias
@@ -283,7 +284,7 @@ mkyt -b 256k -s 48000
 - Cover is scaled to show the entire image and padded to the chosen output size.
 - Visualizers use FFmpeg filters:
     - `showwaves` (waveform; supports custom color, modes line|point|p2p)
-    - `showspectrum` (scrolling spectrogram with configurable frequency bounds, logarithmic/linear frequency axis, adjustable visible time window, and optional custom frequency scale)
+    - `showspectrum` (scrolling spectrogram with configurable frequency bounds, logarithmic/linear frequency axis, adjustable visible time window, and optional custom frequency scale; the fullscreen custom legend is composited from a transparent ImageMagick-generated PNG)
     - `showfreqs` (bar analyzer with log frequency scaling)
  
 - Palette extraction (Monet-like): the cover is quantized (ImageMagick), near-neutrals/extremes are filtered out, and colors are scored
