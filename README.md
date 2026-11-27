@@ -139,7 +139,7 @@ Options (all optional):
   --spectro-vzoom <1-100>  Legacy percentage crop within the selected frequency band
   --spectro-scale <log|linear>  Frequency-axis scale (default: log)
   --spectro-legend  Draw frequency and time axes with labels
-  --spectro-legend-swap  Swap frequency and dB legend sides
+  --spectro-legend-swap  Deprecated alias for the custom readable legend
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
@@ -208,8 +208,10 @@ mkyt spectrum --spectro-fullscreen --spectro-legend
 # Switch frequency placement to linear instead of logarithmic
 mkyt spectrum --spectro-fullscreen --spectro-scale linear
 
-# Put frequency labels on the right (or top with --spectro-vertical)
-# and the dB color scale on the opposite side
+# Draw a readable frequency scale on the right without mirroring the image
+mkyt spectrum --spectro-fullscreen --spectro-legend
+
+# --spectro-legend-swap remains as a backwards-compatible alias
 mkyt spectrum --spectro-fullscreen --spectro-legend-swap
 
 # size the viz as a percent of frame height (overrides -H)
@@ -281,7 +283,7 @@ mkyt -b 256k -s 48000
 - Cover is scaled to show the entire image and padded to the chosen output size.
 - Visualizers use FFmpeg filters:
     - `showwaves` (waveform; supports custom color, modes line|point|p2p)
-    - `showspectrum` (scrolling spectrogram with configurable frequency bounds, logarithmic/linear frequency axis, adjustable visible time window, and optional frequency/time legend)
+    - `showspectrum` (scrolling spectrogram with configurable frequency bounds, logarithmic/linear frequency axis, adjustable visible time window, and optional custom frequency scale)
     - `showfreqs` (bar analyzer with log frequency scaling)
  
 - Palette extraction (Monet-like): the cover is quantized (ImageMagick), near-neutrals/extremes are filtered out, and colors are scored
