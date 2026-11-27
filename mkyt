@@ -330,7 +330,7 @@ esac
 spectro_fscale="log"
 [[ "$spectro_scale" == "linear" ]] && spectro_fscale="lin"
  spectro_legend_opt="disabled"
-(( spectro_legend || spectro_legend_swap )) && spectro_legend_opt="enabled"
+(( spectro_legend )) && spectro_legend_opt="enabled"
 
 # Validate the requested frequency band and visible time span.
 if ! [[ "$spectro_min_freq" =~ ^[0-9]+$ && "$spectro_max_freq" =~ ^[0-9]+$ ]] ||
@@ -527,6 +527,23 @@ elif [[ "$viz" == "spectrum" ]]; then
   else
     a_in="[1:a]"; spec_w="$width"; spec_h="$vizh"
   fi
+  # Reserve black side gutters for independently drawn, readable legends.
+  if (( spectro_legend )); then
+    if (( spectro_vertical )); then
+      echo "Custom frequency legend currently requires the standard horizontal layout; omit --spectro-vertical." >&2
+      exit 2
+    fi
+    legend_left=100
+    legend_w=104
+    spec_w=$((spec_w - legend_left - legend_w))
+    if (( spec_w < 320 )); then
+      echo "Output width is too small for the custom spectrogram legend." >&2
+      exit 2
+    fi
+  else
+    legend_left=0
+    legend_w=0
+  fi
   # The spectrum's frequency axis is its rendered height; its time axis is its width.
   # For rotated layout, the pre-rotation dimensions are swapped.
   zoom_post=""
@@ -562,18 +579,13 @@ elif [[ "$viz" == "spectrum" ]]; then
   # flip-based workaround, this never mirrors the spectrogram or its text.
   spectro_post="${viz_vertical}"
   if (( spectro_legend )); then
-    if (( spectro_vertical )); then
-      echo "Custom frequency legend currently requires the standard horizontal layout; omit --spectro-vertical." >&2
-      exit 2
-    fi
-    legend_w=104
-    spectro_post+=",pad=iw+${legend_w}:ih:0:0:black"
+    spectro_post+=",pad=iw+${legend_left}+${legend_w}:ih:${legend_left}:0:black"
     freq_ticks=(20 50 100 200 500 1000 2000 4000)
     for hz in "${freq_ticks[@]}"; do
       if (( hz >= spectro_min_freq && hz <= spectro_max_freq )); then
         tick_y=$(awk -v f="$hz" -v lo="$spectro_min_freq" -v hi="$spectro_max_freq" -v h="$spec_h" 'BEGIN { if (lo<=0) lo=1; p=log(f/lo)/log(hi/lo); y=(1-p)*(h-1); printf "%d", y }')
-        spectro_post+=",drawbox=x=${spec_w}:y=${tick_y}:w=8:h=2:color=white:t=fill"
-        spectro_post+=",drawtext=text='${hz} Hz':x=$((spec_w+13)):y=$((tick_y-10)):fontsize=18:fontcolor=white:box=1:boxcolor=black@0.75:boxborderw=3"
+        spectro_post+=",drawbox=x=$((legend_left+spec_w)):y=${tick_y}:w=8:h=2:color=white:t=fill"
+        spectro_post+=",drawtext=text='${hz} Hz':x=$((legend_left+spec_w+13)):y=$((tick_y-10)):fontsize=18:fontcolor=white:box=1:boxcolor=black@0.75:boxborderw=3"
       fi
     done
     spectro_post+=",drawtext=text='LEVEL':x=10:y=10:fontsize=16:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=4"
