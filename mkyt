@@ -644,7 +644,21 @@ if [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]]; then
       fi
     done
     legend_draw+=" text 12,28 'LEVEL' text 12,55 '0 dB' text 12,79 '-20' text 12,103 '-40' text 12,127 '-60'"
-    "$imcmd" -size "${width}x${height}" xc:none -fill white -stroke white -strokewidth 2 -font sans -pointsize 18 -draw "$legend_draw" "PNG:$legend_png"
+    # ImageMagick's generic "sans" alias is not available in every install.
+    # Prefer a known system font path rather than relying on fontconfig aliases.
+    legend_font=""
+    for candidate in \
+      "/System/Library/Fonts/Supplemental/Arial.ttf" \
+      "/Library/Fonts/Arial.ttf" \
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" \
+      "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"; do
+      if [[ -f "$candidate" ]]; then legend_font="$candidate"; break; fi
+    done
+    if [[ -z "$legend_font" ]]; then
+      echo "Could not find a usable font for the custom legend. Install Arial or DejaVu Sans, then retry." >&2
+      exit 3
+    fi
+    "$imcmd" -size "${width}x${height}" xc:none -fill white -stroke white -strokewidth 2 -font "$legend_font" -pointsize 18 -draw "$legend_draw" "PNG:$legend_png"
     input_args+=(-loop 1 -i "$legend_png")
     filter_complex="${vizf}[v][1:v]overlay=0:0:shortest=1[vout]"
     vmap="[vout]"
