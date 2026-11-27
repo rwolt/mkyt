@@ -540,7 +540,8 @@ elif [[ "$viz" == "spectrum" ]]; then
     command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1 || {
       echo "--spectro-legend requires ImageMagick (brew install imagemagick)." >&2; exit 3;
     }
-    legend_left=100
+    # Keep only the frequency scale on the right; no left-side level guide.
+    legend_left=0
     legend_w=104
     spec_w=$((spec_w - legend_left - legend_w))
     if (( spec_w < 320 )); then
@@ -659,7 +660,6 @@ if [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]]; then
         legend_draw+=" stroke none text $((legend_left+spec_w+14)),$((tick_y+6)) '$hz Hz'"
       fi
     done
-    legend_draw+=" stroke none text 12,28 'LEVEL' text 12,55 '0 dB' text 12,79 '-20' text 12,103 '-40' text 12,127 '-60'"
     "$imcmd" -size "${width}x${height}" xc:none -fill white -stroke white -strokewidth 2 -font "$legend_font" -pointsize 18 -draw "$legend_draw" "PNG:$legend_png"
     input_args+=(-loop 1 -i "$legend_png")
     filter_complex="${vizf}[v][1:v]overlay=0:0:shortest=1[vout]"
