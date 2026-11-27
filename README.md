@@ -133,12 +133,12 @@ Options (all optional):
   --debug-palette  Print extracted palette JSON and exit
   --spectro-fullscreen  Spectrum full screen (no cover); default 1920x1080
   --viz-percent <1-100>  Visualizer height as % of frame (overrides -H)
-  --spectro-min-freq <Hz>  Lowest displayed frequency (default: 20)
-  --spectro-max-freq <Hz>  Highest displayed frequency (default: 4000)
-  --spectro-seconds <sec>  Time visible across the plot (default: 6)
-  --spectro-vzoom <1-100>  Legacy percentage crop within the selected frequency band
+  --spectro-min-freq <Hz>  Lowest displayed frequency (default: 20 Hz)
+  --spectro-max-freq <Hz>  Highest displayed frequency (default: 4000 Hz)
+  --spectro-seconds <sec>  Audio history across plot width (default: 6)
   --spectro-scale <log|linear>  Frequency-axis scale (default: log)
   --spectro-legend  Draw frequency and time axes with labels
+  --spectro-vzoom <1-100>  Legacy crop within the selected frequency band
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
