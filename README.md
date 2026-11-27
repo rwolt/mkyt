@@ -133,7 +133,10 @@ Options (all optional):
   --debug-palette  Print extracted palette JSON and exit
   --spectro-fullscreen  Spectrum full screen (no cover); default 1920x1080
   --viz-percent <1-100>  Visualizer height as % of frame (overrides -H)
-  --spectro-vzoom <1-100>  Spectrum vertical zoom: keep lowest N% of band
+  --spectro-min-freq <Hz>  Lowest displayed frequency (default: 20)
+  --spectro-max-freq <Hz>  Highest displayed frequency (default: 4000)
+  --spectro-seconds <sec>  Time visible across the plot (default: 6)
+  --spectro-vzoom <1-100>  Legacy percentage crop within the selected frequency band
   --spectro-scale <log|linear>  Frequency-axis scale (default: log)
   --spectro-legend  Draw frequency and time axes with labels
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
@@ -194,6 +197,9 @@ mkyt spectrum --viz-below -B
 
 # full-screen spectrogram (no cover), default 1080p
 mkyt spectrum --spectro-fullscreen
+
+# focused, readable spectrogram: 20 Hz–4 kHz with 6 seconds visible
+mkyt spectrum --spectro-fullscreen --spectro-min-freq 20 --spectro-max-freq 4000 --spectro-seconds 6 --spectro-scale log --spectro-legend
 
 # Show the frequency/time axes; the frequency labels follow the spectrum orientation
 mkyt spectrum --spectro-fullscreen --spectro-legend
@@ -270,7 +276,7 @@ mkyt -b 256k -s 48000
 - Cover is scaled to show the entire image and padded to the chosen output size.
 - Visualizers use FFmpeg filters:
     - `showwaves` (waveform; supports custom color, modes line|point|p2p)
-    - `showspectrum` (scrolling spectrogram with configurable logarithmic/linear frequency axis and optional frequency/time legend; slide=scroll, Hann window, overlap 0.8)
+    - `showspectrum` (scrolling spectrogram with configurable frequency bounds, logarithmic/linear frequency axis, adjustable visible time window, and optional frequency/time legend)
     - `showfreqs` (bar analyzer with log frequency scaling)
  
 - Palette extraction (Monet-like): the cover is quantized (ImageMagick), near-neutrals/extremes are filtered out, and colors are scored
