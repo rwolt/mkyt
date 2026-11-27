@@ -630,21 +630,37 @@ if [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]]; then
   # full-screen spectrum: optional legend is a separate transparent PNG input.
   input_args=(-i "$audio")
   if (( spectro_legend )); then
-    legend_png=$(mktemp -t mkyt-legend)
-    trap 'rm -f "${legend_png:-}"' EXIT
+    legend_dir=$(mktemp -d -t mkyt-legend)
+    legend_png="${legend_dir}/legend.png"
+    trap 'rm -rf "${legend_dir:-}"' EXIT
     imcmd="convert"
     command -v magick >/dev/null 2>&1 && imcmd="magick"
+    legend_font=""
+    for candidate in \
+      "/System/Library/Fonts/Supplemental/Arial.ttf" \
+      "/Library/Fonts/Arial.ttf" \
+      "/System/Library/Fonts/Supplemental/Arial Unicode.ttf" \
+      "/opt/homebrew/share/fonts/dejavu/DejaVuSans.ttf" \
+      "/usr/local/share/fonts/dejavu/DejaVuSans.ttf" \
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" \
+      "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"; do
+      if [[ -f "$candidate" ]]; then legend_font="$candidate"; break; fi
+    done
+    if [[ -z "$legend_font" ]]; then
+      echo "Could not find a usable font for the custom legend. Install Arial or DejaVu Sans, then retry." >&2
+      exit 3
+    fi
     legend_draw=""
     freq_ticks=(20 50 100 200 500 1000 2000 4000)
     for hz in "${freq_ticks[@]}"; do
       if (( hz >= spectro_min_freq && hz <= spectro_max_freq )); then
         tick_y=$(awk -v f="$hz" -v lo="$spectro_min_freq" -v hi="$spectro_max_freq" -v h="$height" 'BEGIN { if (lo<=0) lo=1; p=log(f/lo)/log(hi/lo); printf "%d", (1-p)*(h-1) }')
         legend_draw+=" line $((legend_left+spec_w)),$tick_y $((legend_left+spec_w+8)),$tick_y"
-        legend_draw+=" text $((legend_left+spec_w+14)),$((tick_y+6)) '$hz Hz'"
+        legend_draw+=" stroke none text $((legend_left+spec_w+14)),$((tick_y+6)) '$hz Hz'"
       fi
     done
-    legend_draw+=" text 12,28 'LEVEL' text 12,55 '0 dB' text 12,79 '-20' text 12,103 '-40' text 12,127 '-60'"
-    "$imcmd" -size "${width}x${height}" xc:none -fill white -stroke white -strokewidth 2 -font sans -pointsize 18 -draw "$legend_draw" "PNG:$legend_png"
+    legend_draw+=" stroke none text 12,28 'LEVEL' text 12,55 '0 dB' text 12,79 '-20' text 12,103 '-40' text 12,127 '-60'"
+    "$imcmd" -size "${width}x${height}" xc:none -fill white -stroke white -strokewidth 2 -font "$legend_font" -pointsize 18 -draw "$legend_draw" "PNG:$legend_png"
     input_args+=(-loop 1 -i "$legend_png")
     filter_complex="${vizf}[v][1:v]overlay=0:0:shortest=1[vout]"
     vmap="[vout]"
