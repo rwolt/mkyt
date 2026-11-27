@@ -39,6 +39,7 @@ Options (all optional):
   --spectro-vzoom <1-100> Legacy percentage crop within the selected band
   --spectro-scale <log|linear>  Frequency-axis scale (default: log)
   --spectro-legend  Draw frequency and time axes with labels
+  --spectro-legend-swap  Swap frequency and dB legend sides (reverses scroll direction to compensate)
   -b <abr>         Audio bitrate for native AAC (default: 320k)
   -s <sr>          Audio sample rate (default: 48000)
   -Q <crf>         H.264 CRF (lower=better; default: 18)
@@ -275,7 +276,7 @@ width="" height="" user_set_dims=0
 vizh=300 align="bottom" margin=0 fps=25
 rect=0 rect_color="black@0.45" black_flag=0
 wf_mode="line" palette="intensity"
-spectro_scroll="scroll" spectro_center=0 spectro_vertical=0 spectro_scale="log" spectro_legend=0
+spectro_scroll="scroll" spectro_center=0 spectro_vertical=0 spectro_scale="log" spectro_legend=0 spectro_legend_swap=0
 # place visualizer below cover
 viz_below=0
 abr="320k" sr=48000 crf=18 preset="medium" auto_color=0
@@ -308,6 +309,7 @@ while [[ $# -gt 0 ]]; do
     --spectro-vertical) spectro_vertical=1; shift ;;
     --spectro-scale) spectro_scale="$2"; shift 2 ;;
     --spectro-legend) spectro_legend=1; shift ;;
+    --spectro-legend-swap) spectro_legend_swap=1; shift ;;
     --spectro-min-freq) spectro_min_freq="$2"; shift 2 ;;
     --spectro-max-freq) spectro_max_freq="$2"; shift 2 ;;
     --spectro-seconds) spectro_seconds="$2"; shift 2 ;;
@@ -328,7 +330,20 @@ esac
 spectro_fscale="log"
 [[ "$spectro_scale" == "linear" ]] && spectro_fscale="lin"
  spectro_legend_opt="disabled"
-(( spectro_legend )) && spectro_legend_opt="enabled"
+(( spectro_legend || spectro_legend_swap )) && spectro_legend_opt="enabled"
+
+# Swapping the legend sides mirrors the rendered spectrum. Reverse the incoming
+# scroll direction as well so new audio still enters from the expected edge.
+spectro_render_scroll="$spectro_scroll"
+if (( spectro_legend_swap )) && [[ "$spectro_scroll" == "scroll" ]]; then
+  spectro_render_scroll="rscroll"
+elif (( spectro_legend_swap )) && [[ "$spectro_scroll" == "rscroll" ]]; then
+  spectro_render_scroll="scroll"
+fi
+spectro_legend_flip=""
+if (( spectro_legend_swap )); then
+  if (( spectro_vertical )); then spectro_legend_flip=",vflip"; else spectro_legend_flip=",hflip"; fi
+fi
 
 # Validate the requested frequency band and visible time span.
 if ! [[ "$spectro_min_freq" =~ ^[0-9]+$ && "$spectro_max_freq" =~ ^[0-9]+$ ]] ||
@@ -557,9 +572,9 @@ elif [[ "$viz" == "spectrum" ]]; then
     zoom_post="[s]crop=iw:${spec_h}:0:ih-${spec_h}[s];"
   fi
   if (( spectro_center )); then
-    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=scroll:legend=${spectro_legend_opt}:win_func=hann:overlap=${spectro_overlap}:start=${spectro_min_freq}:stop=${spectro_max_freq}:color=${palette},format=rgba[s];${zoom_post}[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=scroll:legend=${spectro_legend_opt}:win_func=hann:overlap=${spectro_overlap}:start=${spectro_min_freq}:stop=${spectro_max_freq}:color=${palette},format=rgba[s];${zoom_post}[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical}${spectro_legend_flip},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   else
-    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=${spectro_scroll}:legend=${spectro_legend_opt}:win_func=hann:overlap=${spectro_overlap}:start=${spectro_min_freq}:stop=${spectro_max_freq}:color=${palette},format=rgba[s];${zoom_post}[s]copy${viz_vertical},fps=${fps},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=${spectro_render_scroll}:legend=${spectro_legend_opt}:win_func=hann:overlap=${spectro_overlap}:start=${spectro_min_freq}:stop=${spectro_max_freq}:color=${palette},format=rgba[s];${zoom_post}[s]copy${viz_vertical}${spectro_legend_flip},fps=${fps},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   fi
 elif [[ "$viz" == "bars" ]]; then
   if (( auto_color )); then
