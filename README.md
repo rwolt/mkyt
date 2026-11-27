@@ -198,19 +198,24 @@ mkyt spectrum --viz-below -B
 # full-screen spectrogram (no cover), default 1080p
 mkyt spectrum --spectro-fullscreen
 
-# focused, readable spectrogram: 20 Hz–4 kHz with 6 seconds visible
-mkyt spectrum --spectro-fullscreen --spectro-min-freq 20 --spectro-max-freq 4000 --spectro-seconds 6 --spectro-scale log --spectro-legend
+# focused, readable portrait spectrogram: 20 Hz–4 kHz, 6 seconds visible, 60 FPS
+mkyt spectrum --spectro-fullscreen \
+  --spectro-min-freq 20 --spectro-max-freq 4000 \
+  --spectro-seconds 6 --spectro-scale log --spectro-legend \
+  -f 60 -w 1080 -h 1920 -o hook.mp4
 
-# Show the frequency/time axes; the frequency labels follow the spectrum orientation
-mkyt spectrum --spectro-fullscreen --spectro-legend
+# Show a shorter or longer time window without changing output FPS
+mkyt spectrum --spectro-fullscreen --spectro-seconds 5 --spectro-legend
+mkyt spectrum --spectro-fullscreen --spectro-seconds 8 --spectro-legend
 
 # Switch frequency placement to linear instead of logarithmic
-mkyt spectrum --spectro-fullscreen --spectro-scale linear
+mkyt spectrum --spectro-fullscreen --spectro-scale linear --spectro-legend
 
 # size the viz as a percent of frame height (overrides -H)
 mkyt spectrum --viz-below --viz-percent 30 -B
 
-# zoom into lower frequencies (keep lowest 50% of band, then scale back)
+# Legacy percentage zoom (prefer --spectro-min-freq / --spectro-max-freq
+# for an exact frequency range)
 mkyt spectrum --viz-below --viz-percent 35 --spectro-vzoom 50 -B
 ```
 ### 4) Bar analyzer (“dance” look)
@@ -276,7 +281,7 @@ mkyt -b 256k -s 48000
 - Cover is scaled to show the entire image and padded to the chosen output size.
 - Visualizers use FFmpeg filters:
     - `showwaves` (waveform; supports custom color, modes line|point|p2p)
-    - `showspectrum` (scrolling spectrogram with configurable frequency bounds, logarithmic/linear frequency axis, adjustable visible time window, and optional frequency/time legend)
+    - `showspectrum` (scrolling spectrogram with configurable minimum/maximum frequency in Hz, logarithmic/linear frequency spacing, adjustable visible history in seconds, and optional frequency/time legend). The visible time window is independent of output FPS; for example, `--spectro-seconds 6` shows about six seconds across the plot.
     - `showfreqs` (bar analyzer with log frequency scaling)
  
 - Palette extraction (Monet-like): the cover is quantized (ImageMagick), near-neutrals/extremes are filtered out, and colors are scored
