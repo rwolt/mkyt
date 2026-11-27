@@ -644,7 +644,7 @@ if [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]]; then
       fi
     done
     legend_draw+=" text 12,28 'LEVEL' text 12,55 '0 dB' text 12,79 '-20' text 12,103 '-40' text 12,127 '-60'"
-    "$imcmd" -size "${width}x${height}" xc:none -fill white -stroke white -strokewidth 2 -draw "$legend_draw" -stroke none -font sans -pointsize 18 -draw "$legend_draw" "PNG:$legend_png"
+    "$imcmd" -size "${width}x${height}" xc:none -fill white -stroke white -strokewidth 2 -font sans -pointsize 18 -draw "$legend_draw" "PNG:$legend_png"
     input_args+=(-loop 1 -i "$legend_png")
     filter_complex="${vizf}[v][1:v]overlay=0:0:shortest=1[vout]"
     vmap="[vout]"
