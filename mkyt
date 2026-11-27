@@ -33,7 +33,10 @@ Options (all optional):
   -f <fps>         Viz FPS (default: 25)
   -K <palette>     Spectrum palette (e.g. intensity|rainbow) (default: intensity)
   --viz-percent <1-100>  Visualizer height as % of frame (overrides -H)
-  --spectro-vzoom <1-100> Spectrum freq zoom: keep lowest N% of band (e.g., 50 keeps ~0..12k)
+  --spectro-min-freq <Hz>  Lowest displayed frequency (default: 20)
+  --spectro-max-freq <Hz>  Highest displayed frequency (default: 4000)
+  --spectro-seconds <sec>  Time visible across the plot (default: 6)
+  --spectro-vzoom <1-100> Legacy percentage crop within the selected band
   --spectro-scale <log|linear>  Frequency-axis scale (default: log)
   --spectro-legend  Draw frequency and time axes with labels
   -b <abr>         Audio bitrate for native AAC (default: 320k)
@@ -282,6 +285,7 @@ auto_color_mode="auto"
 spectro_fullscreen=0
 viz_percent=0
 spectro_vzoom=0
+spectro_min_freq=20 spectro_max_freq=4000 spectro_seconds=6
 
 # --- pre-parse positional + long flags (so getopts won’t choke) ---
 while [[ $# -gt 0 ]]; do
@@ -304,6 +308,9 @@ while [[ $# -gt 0 ]]; do
     --spectro-vertical) spectro_vertical=1; shift ;;
     --spectro-scale) spectro_scale="$2"; shift 2 ;;
     --spectro-legend) spectro_legend=1; shift ;;
+    --spectro-min-freq) spectro_min_freq="$2"; shift 2 ;;
+    --spectro-max-freq) spectro_max_freq="$2"; shift 2 ;;
+    --spectro-seconds) spectro_seconds="$2"; shift 2 ;;
     --viz-percent) viz_percent="$2"; shift 2 ;;
     --spectro-vzoom) spectro_vzoom="$2"; shift 2 ;;
     --viz-below|--spectro-below) viz_below=1; shift ;;
@@ -320,8 +327,18 @@ case "$spectro_scale" in
 esac
 spectro_fscale="log"
 [[ "$spectro_scale" == "linear" ]] && spectro_fscale="lin"
-spectro_legend_opt="disabled"
+ spectro_legend_opt="disabled"
 (( spectro_legend )) && spectro_legend_opt="enabled"
+
+# Validate the requested frequency band and visible time span.
+if ! [[ "$spectro_min_freq" =~ ^[0-9]+$ && "$spectro_max_freq" =~ ^[0-9]+$ ]] ||
+   (( spectro_min_freq < 0 || spectro_max_freq <= spectro_min_freq )); then
+  echo "Invalid frequency range: require 0 <= min < max (Hz)"; exit 2
+fi
+if ! [[ "$spectro_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+   ! awk -v s="$spectro_seconds" 'BEGIN{exit !(s>0 && s<=120)}'; then
+  echo "Invalid --spectro-seconds (use a value >0 and <=120)"; exit 2
+fi
 
 # --- short options via getopts ---
 OPTIND=1
@@ -359,6 +376,9 @@ command -v ffprobe >/dev/null || { echo "ffprobe not found (part of ffmpeg)"; ex
 [[ -z "$audio" ]] && audio="$(find_audio)"
 [[ -z "$cover" ]] && cover="$(find_cover)"
 [[ -n "$audio" && -f "$audio" ]] || { echo "No audio found. Put a .wav or .mp3 here or pass -a"; exit 5; }
+source_sr=$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of default=noprint_wrappers=1:nokey=1 "$audio" | head -n 1)
+[[ "$source_sr" =~ ^[0-9]+$ ]] || { echo "Could not determine audio sample rate"; exit 5; }
+if (( spectro_max_freq > source_sr / 2 )); then echo "Maximum spectrogram frequency must not exceed Nyquist ($((source_sr / 2)) Hz)"; exit 2; fi
 if ! { [[ "$viz" == "spectrum" && $spectro_fullscreen -eq 1 ]] ; }; then
   [[ -n "$cover" && -f "$cover" ]] || { echo "No cover image found. Add cover/folder.* or .jpg/.png, or pass -i"; exit 4; }
 fi
@@ -505,31 +525,41 @@ elif [[ "$viz" == "spectrum" ]]; then
   else
     a_in="[1:a]"; spec_w="$width"; spec_h="$vizh"
   fi
-  # If vertical layout, render pre-rotated dimensions so after transpose it fits width x spec_h.
-  # With frequency zoom, increase the spectrum render height before cropping so the
-  # retained band has enough pixels to fill the final output without being enlarged.
+  # The spectrum's frequency axis is its rendered height; its time axis is its width.
+  # For rotated layout, the pre-rotation dimensions are swapped.
+  zoom_post=""
+  render_h="$spec_h"
+  if [[ ${spectro_vzoom:-0} -gt 0 && ${spectro_vzoom:-0} -le 100 ]]; then
+    keep_frac=$(awk -v p="$spectro_vzoom" 'BEGIN{ printf "%.6f", p/100.0 }')
+    render_h=$(awk -v target="$spec_h" -v frac="$keep_frac" 'BEGIN{ printf "%d", int(target/frac + 0.999999) }')
+  fi
+  if (( spectro_vertical )); then
+    spec_size="${spec_h}x${render_h}"
+    time_pixels="$spec_h"
+  else
+    spec_size="${spec_w}x${render_h}"
+    time_pixels="$spec_w"
+  fi
+
+  # FFmpeg's FFT window is twice the frequency-axis pixel count. Each scrolling
+  # column advances by (1-overlap)*window_size samples. Solve overlap so the
+  # complete time axis represents the requested number of seconds.
+  fft_window=$(( render_h * 2 ))
+  spectro_overlap=$(awk -v seconds="$spectro_seconds" -v rate="$source_sr" -v pixels="$time_pixels" -v win="$fft_window" 'BEGIN {
+    ov = 1 - (seconds * rate / pixels) / win;
+    if (ov < 0) ov = 0;
+    if (ov > 0.9999) ov = 0.9999;
+    printf "%.6f", ov;
+  }')
+  dbg "spectrum: band=${spectro_min_freq}-${spectro_max_freq}Hz time=${spectro_seconds}s overlap=$spectro_overlap fft_window=$fft_window time_pixels=$time_pixels"
   zoom_post=""
   if [[ ${spectro_vzoom:-0} -gt 0 && ${spectro_vzoom:-0} -le 100 ]]; then
-    keep_frac=$(awk -v p="$spectro_vzoom" 'BEGIN{ printf "%.4f", p/100.0 }')
-    scale_target_h=$spec_h
-    if (( spectro_vertical )); then scale_target_h=$spec_w; fi
-    render_h=$(awk -v target="$scale_target_h" -v frac="$keep_frac" 'BEGIN{ printf "%d", int(target/frac + 0.999999) }')
-    if (( spectro_vertical )); then
-      spec_size="${spec_h}x${render_h}"
-    else
-      spec_size="${spec_w}x${render_h}"
-    fi
-    # Keep the bottom (lowest-frequency) portion at native output height; no post-crop upscaling.
-    zoom_post="[s]crop=iw:${scale_target_h}:0:ih-${scale_target_h}[s];"
-  elif (( spectro_vertical )); then
-    spec_size="${spec_h}x${spec_w}"
-  else
-    spec_size="${spec_w}x${spec_h}"
+    zoom_post="[s]crop=iw:${spec_h}:0:ih-${spec_h}[s];"
   fi
   if (( spectro_center )); then
-    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=scroll:legend=${spectro_legend_opt}:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];${zoom_post}[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=scroll:legend=${spectro_legend_opt}:win_func=hann:overlap=${spectro_overlap}:start=${spectro_min_freq}:stop=${spectro_max_freq}:color=${palette},format=rgba[s];${zoom_post}[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   else
-    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=${spectro_scroll}:legend=${spectro_legend_opt}:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];${zoom_post}[s]copy${viz_vertical},fps=${fps},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=${spectro_scroll}:legend=${spectro_legend_opt}:win_func=hann:overlap=${spectro_overlap}:start=${spectro_min_freq}:stop=${spectro_max_freq}:color=${palette},format=rgba[s];${zoom_post}[s]copy${viz_vertical},fps=${fps},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   fi
 elif [[ "$viz" == "bars" ]]; then
   if (( auto_color )); then
