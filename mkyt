@@ -34,6 +34,8 @@ Options (all optional):
   -K <palette>     Spectrum palette (e.g. intensity|rainbow) (default: intensity)
   --viz-percent <1-100>  Visualizer height as % of frame (overrides -H)
   --spectro-vzoom <1-100> Spectrum freq zoom: keep lowest N% of band (e.g., 50 keeps ~0..12k)
+  --spectro-scale <log|linear>  Frequency-axis scale (default: log)
+  --spectro-legend  Draw frequency and time axes with labels
   -b <abr>         Audio bitrate for native AAC (default: 320k)
   -s <sr>          Audio sample rate (default: 48000)
   -Q <crf>         H.264 CRF (lower=better; default: 18)
@@ -270,7 +272,7 @@ width="" height="" user_set_dims=0
 vizh=300 align="bottom" margin=0 fps=25
 rect=0 rect_color="black@0.45" black_flag=0
 wf_mode="line" palette="intensity"
-spectro_scroll="scroll" spectro_center=0 spectro_vertical=0
+spectro_scroll="scroll" spectro_center=0 spectro_vertical=0 spectro_scale="log" spectro_legend=0
 # place visualizer below cover
 viz_below=0
 abr="320k" sr=48000 crf=18 preset="medium" auto_color=0
@@ -300,6 +302,8 @@ while [[ $# -gt 0 ]]; do
     --spectro-scroll) spectro_scroll="$2"; shift 2 ;;
     --spectro-center) spectro_center=1; shift ;;
     --spectro-vertical) spectro_vertical=1; shift ;;
+    --spectro-scale) spectro_scale="$2"; shift 2 ;;
+    --spectro-legend) spectro_legend=1; shift ;;
     --viz-percent) viz_percent="$2"; shift 2 ;;
     --spectro-vzoom) spectro_vzoom="$2"; shift 2 ;;
     --viz-below|--spectro-below) viz_below=1; shift ;;
@@ -308,6 +312,16 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1"; usage; exit 2 ;;
   esac
 done
+
+# Validate spectrum display options.
+case "$spectro_scale" in
+  log|linear) ;;
+  *) echo "Invalid --spectro-scale '$spectro_scale' (use log|linear)"; exit 2 ;;
+esac
+spectro_fscale="log"
+[[ "$spectro_scale" == "linear" ]] && spectro_fscale="lin"
+spectro_legend_opt="disabled"
+(( spectro_legend )) && spectro_legend_opt="enabled"
 
 # --- short options via getopts ---
 OPTIND=1
@@ -513,9 +527,9 @@ elif [[ "$viz" == "spectrum" ]]; then
     spec_size="${spec_w}x${spec_h}"
   fi
   if (( spectro_center )); then
-    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:slide=scroll:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];${zoom_post}[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=scroll:legend=${spectro_legend_opt}:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];${zoom_post}[s]split=2[s0][s1];[s0]hflip,crop=iw/2:ih:0:0[left];[s1]crop=iw/2:ih:iw/2:0[right];[left][right]hstack=inputs=2${viz_vertical},fps=${fps}[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   else
-    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:slide=${spectro_scroll}:legend=disabled:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];${zoom_post}[s]copy${viz_vertical},fps=${fps},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
+    vizf="${a_in}showspectrum=s=${spec_size}:mode=combined:scale=log:fscale=${spectro_fscale}:slide=${spectro_scroll}:legend=${spectro_legend_opt}:win_func=hann:overlap=0.8:color=${palette},format=rgba[s];${zoom_post}[s]copy${viz_vertical},fps=${fps},format=rgba[$([[ $spectro_fullscreen -eq 1 ]] && echo v || echo viz)];"
   fi
 elif [[ "$viz" == "bars" ]]; then
   if (( auto_color )); then
