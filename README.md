@@ -139,6 +139,7 @@ Options (all optional):
   --spectro-vzoom <1-100>  Legacy percentage crop within the selected frequency band
   --spectro-scale <log|linear>  Frequency-axis scale (default: log)
   --spectro-legend  Draw frequency and time axes with labels
+  --spectro-legend-swap  Swap frequency and dB legend sides
   --spectro-scroll <scroll|rscroll|fullframe|replace>  Spectrum slide mode (default: scroll)
   --spectro-center  Center-out spectrum (new data at center)
   --spectro-vertical Vertical spectrum layout (rotate 90° CCW)
@@ -206,6 +207,10 @@ mkyt spectrum --spectro-fullscreen --spectro-legend
 
 # Switch frequency placement to linear instead of logarithmic
 mkyt spectrum --spectro-fullscreen --spectro-scale linear
+
+# Put frequency labels on the right (or top with --spectro-vertical)
+# and the dB color scale on the opposite side
+mkyt spectrum --spectro-fullscreen --spectro-legend-swap
 
 # size the viz as a percent of frame height (overrides -H)
 mkyt spectrum --viz-below --viz-percent 30 -B
